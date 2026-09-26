@@ -2,6 +2,7 @@ package dev.jev.wechatmood.core
 
 import android.content.Context
 import android.net.Uri
+import dev.jev.wechatmood.BuildConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
