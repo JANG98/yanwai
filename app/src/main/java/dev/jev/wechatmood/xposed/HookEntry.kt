@@ -17,8 +17,7 @@ import dev.jev.wechatmood.core.ModulePrefs
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.hook.MessageSniffer
-import dev.jev.wechatmood.hook.SettingsEntryHook
-import dev.jev.wechatmood.hook.MainScreenEntry
+import dev.jev.wechatmood.hook.HomeMenuEntry
 
 /** Direct package entry, independent of the optional initZygote callback. */
 class HookEntry : IXposedHookLoadPackage {
@@ -70,8 +69,7 @@ class HookEntry : IXposedHookLoadPackage {
             // 预热聊天分析持久化缓存，避免二次 AI 调用
             ChatAnalysisStore.warmup(context)
             SignalAnalyzer.init(context)
-            SettingsEntryHook.install(context.classLoader)
-            MainScreenEntry.install(context.classLoader)
+            HomeMenuEntry.install(context.classLoader)
             MessageSniffer.install(context)
             installed = true
         }.onFailure {

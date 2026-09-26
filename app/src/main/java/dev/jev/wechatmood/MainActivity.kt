@@ -53,7 +53,8 @@ class MainActivity : AppCompatActivity() {
     private var syncingSkills = false
     private var currentRepositoryId: String? = null  // 当前查看的仓库 ID，null 表示显示仓库列表
     private lateinit var importAnalysisLauncher: androidx.activity.result.ActivityResultLauncher<String>
-    private lateinit var importSkillLauncher: androidx.activity.result.ActivityResultLauncher<String>
+    private lateinit var importSkillLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>
+    private lateinit var importSkillFolderLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri>
     private val stateListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (!isFinishing && !isDestroyed) refresh() }
     }
@@ -78,9 +79,13 @@ class MainActivity : AppCompatActivity() {
         importAnalysisLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
             uri?.let { importAnalysisFromUri(it) }
         }
-        // 初始化导入技能的文件选择器
-        importSkillLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
-            uri?.let { importSkillFromUri(it) }
+        // 初始化导入技能的文件选择器（支持多选）
+        importSkillLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            uris?.let { importSkillsFromUris(it) }
+        }
+        // 初始化导入技能的文件夹选择器
+        importSkillFolderLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+            uri?.let { importSkillsFromFolder(it) }
         }
         // Makes the settings provider visible to WeChat on Android 11+.
         // The provider validates the caller UID before sharing settings with WeChat.
@@ -143,7 +148,8 @@ class MainActivity : AppCompatActivity() {
         }
         binding.buttonAddSkill.setOnClickListener { showSkillDialog(null) }
         binding.buttonDownloadSkill.setOnClickListener { showDownloadSkillDialog() }
-        binding.buttonImportSkill.setOnClickListener { importSkillLauncher.launch("*/*") }
+        binding.buttonImportSkill.setOnClickListener { importSkillLauncher.launch(arrayOf("*/*")) }
+        binding.buttonImportSkillFolder.setOnClickListener { importSkillFolderLauncher.launch(null) }
         renderSkillList()
         binding.buttonDebug.setOnClickListener {
             val open = binding.debugPanel.visibility != View.VISIBLE
@@ -694,10 +700,18 @@ class MainActivity : AppCompatActivity() {
                     setPadding(0, dp(2), 0, 0)
                 })
             } else if (skill.prompt.isNotBlank()) {
+                // 限制提示词显示长度，避免占用整个屏幕
+                val displayPrompt = if (skill.prompt.length > 100) {
+                    skill.prompt.take(100) + "..."
+                } else {
+                    skill.prompt
+                }
                 addView(TextView(this@MainActivity).apply {
-                    text = "提示：${skill.prompt}"
+                    text = "提示：$displayPrompt"
                     setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
                     textSize = 12f
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding(0, dp(2), 0, 0)
                 })
             }
@@ -909,36 +923,165 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 从选择的文件导入技能（SKILL.md）。
+     * 从选择的多个文件导入技能（SKILL.md）。
+     * 如果当前在仓库详情页，则导入到该仓库；否则导入为自定义技能。
      */
-    private fun importSkillFromUri(uri: Uri) {
-        runCatching {
-            contentResolver.openInputStream(uri)?.use { input ->
-                val content = input.bufferedReader().use { it.readText() }
-                val (name, description, prompt) = SkillParser.parse(content)
-                val skill = Skill(
-                    id = Skill.newId(),
-                    name = name,
-                    description = description.ifBlank { "从文件导入的技能" },
-                    prompt = SkillParser.truncatePrompt(prompt),
-                    enabled = false,
-                    source = Skill.SOURCE_CUSTOM,
-                )
-                val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
-                SkillStore.add(p, skill)
-                SettingsProvider.save(this) { }
-                ModulePrefs.reload(force = true)
-                runOnUiThread {
-                    renderSkillList()
-                    Toast.makeText(this, "已导入技能「${skill.name}」，在列表中开启即可使用", Toast.LENGTH_LONG).show()
+    private fun importSkillsFromUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val targetRepoId = currentRepositoryId
+        val imported = mutableListOf<Skill>()
+        val failed = mutableListOf<String>()
+
+        uris.forEach { uri ->
+            runCatching {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val content = input.bufferedReader().use { it.readText() }
+                    val (name, description, prompt) = SkillParser.parse(content)
+                    val skill = Skill(
+                        id = Skill.newId(),
+                        name = name,
+                        description = description.ifBlank { "从文件导入的技能" },
+                        prompt = SkillParser.truncatePrompt(prompt),
+                        enabled = false,
+                        source = if (targetRepoId != null) Skill.SOURCE_LIBRARY else Skill.SOURCE_CUSTOM,
+                        repositoryId = targetRepoId ?: "",
+                        filePath = uri.lastPathSegment ?: "imported.md",
+                    )
+                    imported.add(skill)
                 }
-            } ?: run {
-                Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                failed.add(uri.lastPathSegment ?: "未知文件")
+                MoodLog.e("IMPORT_SKILL_FILE_FAILED", it)
+            }
+        }
+
+        if (imported.isNotEmpty()) {
+            val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+            SkillStore.addAll(p, imported)
+            SettingsProvider.save(this) { }
+            ModulePrefs.reload(force = true)
+        }
+
+        runOnUiThread {
+            renderSkillList()
+            val msg = buildString {
+                append("成功导入 ${imported.size} 个技能")
+                if (targetRepoId != null) append("到当前技能库")
+                if (failed.isNotEmpty()) append("，失败 ${failed.size} 个")
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * 从选择的文件夹导入技能（扫描所有 SKILL.md 文件）。
+     * 如果当前在仓库详情页，则导入到该仓库；否则创建一个新仓库。
+     */
+    private fun importSkillsFromFolder(treeUri: Uri) {
+        runCatching {
+            // 授予目录读取权限
+            contentResolver.takePersistableUriPermission(
+                treeUri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+
+            val targetRepoId = currentRepositoryId
+            val imported = mutableListOf<Skill>()
+
+            // 递归扫描目录中的 SKILL.md 文件
+            scanFolderForSkills(treeUri, imported, targetRepoId)
+
+            if (imported.isEmpty()) {
+                runOnUiThread {
+                    Toast.makeText(this, "该文件夹中没有找到 SKILL.md 文件", Toast.LENGTH_LONG).show()
+                }
+                return
+            }
+
+            val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+
+            // 如果没有指定目标仓库，创建一个新仓库
+            val repoId = if (targetRepoId == null) {
+                val repoName = treeUri.lastPathSegment?.split(":")?.lastOrNull()?.substringAfterLast("/") ?: "导入的技能库"
+                val newRepo = SkillRepository(
+                    id = "repo_${System.currentTimeMillis()}",
+                    name = repoName,
+                    url = "",
+                    dirName = "",
+                    version = "local",
+                    skillCount = imported.size,
+                )
+                SkillStore.addRepository(p, newRepo)
+                imported.forEach { it.copy(repositoryId = newRepo.id) }
+                newRepo.id
+            } else {
+                targetRepoId
+            }
+
+            // 设置 repositoryId 并保存
+            val skillsWithRepo = imported.map { it.copy(repositoryId = repoId, source = Skill.SOURCE_LIBRARY) }
+            SkillStore.addAll(p, skillsWithRepo)
+            SettingsProvider.save(this) { }
+            ModulePrefs.reload(force = true)
+
+            runOnUiThread {
+                renderSkillList()
+                Toast.makeText(this, "从文件夹成功导入 ${imported.size} 个技能", Toast.LENGTH_LONG).show()
             }
         }.onFailure {
-            MoodLog.e("IMPORT_SKILL_FAILED", it)
+            MoodLog.e("IMPORT_SKILL_FOLDER_FAILED", it)
             runOnUiThread {
-                Toast.makeText(this, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "文件夹导入失败：${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * 递归扫描文件夹中的 SKILL.md 文件。
+     */
+    private fun scanFolderForSkills(uri: Uri, result: MutableList<Skill>, repoId: String?) {
+        val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+            uri,
+            android.provider.DocumentsContract.getTreeDocumentId(uri)
+        )
+        val cursor = contentResolver.query(childrenUri, arrayOf(
+            android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+        ), null, null, null) ?: return
+
+        cursor.use {
+            while (it.moveToNext()) {
+                val docId = it.getString(0)
+                val name = it.getString(1)
+                val mime = it.getString(2)
+
+                if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
+                    // 递归扫描子目录
+                    val childUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(uri, docId)
+                    scanFolderForSkills(childUri, result, repoId)
+                } else if (name.equals("SKILL.md", ignoreCase = true) || name.endsWith(".md", ignoreCase = true)) {
+                    // 读取并解析 SKILL.md
+                    runCatching {
+                        val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(uri, docId)
+                        contentResolver.openInputStream(fileUri)?.use { input ->
+                            val content = input.bufferedReader().use { it.readText() }
+                            val (skillName, description, prompt) = SkillParser.parse(content)
+                            result.add(
+                                Skill(
+                                    id = Skill.newId(),
+                                    name = skillName,
+                                    description = description.ifBlank { "从文件夹导入的技能" },
+                                    prompt = SkillParser.truncatePrompt(prompt),
+                                    enabled = false,
+                                    source = Skill.SOURCE_LIBRARY,
+                                    repositoryId = repoId ?: "",
+                                    filePath = name,
+                                )
+                            )
+                        }
+                    }.onFailure { MoodLog.e("SCAN_SKILL_FILE_FAILED", it) }
+                }
             }
         }
     }
