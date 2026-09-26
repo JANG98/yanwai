@@ -169,6 +169,18 @@
             <TextView style="@style/Yanwai.Body" android:text="先复现一次，再导出日志。问题自行恢复后，也可以查看之前的记录。" />
             <com.google.android.material.button.MaterialButton android:id="@+id/buttonExportLog"
                 style="@style/Yanwai.Button.Outline" android:layout_marginTop="12dp" android:text="导出运行日志" />
+
+            <TextView style="@style/Yanwai.Section" android:layout_marginTop="24dp" android:text="聊天分析数据管理" />
+            <TextView style="@style/Yanwai.Body" android:text="导出所有聊天分析记录为 zip 备份文件，或从备份文件导入恢复。已分析过的消息不会重复调用 AI。" />
+            <TextView android:id="@+id/textAnalysisCount" style="@style/Yanwai.Caption" android:layout_marginTop="8dp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginTop="12dp">
+                <com.google.android.material.button.MaterialButton android:id="@+id/buttonExportAnalysis"
+                    style="@style/Yanwai.Button.Outline" android:layout_width="0dp" android:layout_weight="1" android:text="导出分析数据" />
+                <View android:layout_width="8dp" android:layout_height="1dp" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/buttonImportAnalysis"
+                    style="@style/Yanwai.Button.Outline" android:layout_width="0dp" android:layout_weight="1" android:text="导入分析数据" />
+            </LinearLayout>
             <com.google.android.material.button.MaterialButton android:id="@+id/buttonDebug"
                 style="@style/Yanwai.Button.Text" android:text="查看详细排查信息" />
             <LinearLayout android:id="@+id/debugPanel" android:layout_width="match_parent"

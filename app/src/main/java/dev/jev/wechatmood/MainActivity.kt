@@ -25,6 +25,8 @@ import dev.jev.wechatmood.core.JevProvider
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.core.SettingsProvider
+import dev.jev.wechatmood.core.ChatAnalysisStore
+import dev.jev.wechatmood.core.AnalysisBackupManager
 import dev.jev.wechatmood.databinding.ActivityMainBinding
 import dev.jev.wechatmood.updates.UpdateNotice
 import dev.jev.wechatmood.ui.ProbeState
@@ -152,6 +154,8 @@ class MainActivity : AppCompatActivity() {
         binding.buttonRefreshLog.setOnClickListener { refresh() }
         binding.buttonCopyLog.setOnClickListener { Diagnostics.copy(this) }
         binding.buttonExportLog.setOnClickListener { Diagnostics.export(this) }
+        binding.buttonExportAnalysis.setOnClickListener { exportAnalysisData() }
+        binding.buttonImportAnalysis.setOnClickListener { importAnalysisData() }
         binding.buttonOpenSource.setOnClickListener { openHelp("https://github.com/YIRC99/yanwai") }
         binding.buttonCopyAuthor.setOnClickListener {
             runCatching {
@@ -253,6 +257,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        updateAnalysisCount()
         // Lifecycle dispatch finishes after onResume; cached notices also need RESUMED.
         binding.root.post {
             if (!isFinishing && !isDestroyed && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
@@ -424,6 +429,87 @@ class MainActivity : AppCompatActivity() {
             scrollTo(binding.wechatSection)
             Toast.makeText(this, "无法打开微信，请检查是否安装在同一空间", Toast.LENGTH_LONG).show()
         }
+    }
+
+    // ========== 聊天分析数据管理 ==========
+
+    private fun updateAnalysisCount() {
+        runCatching {
+            val count = ChatAnalysisStore.totalCount(this)
+            binding.textAnalysisCount.text = "当前已保存 ${"%,d".format(count)} 条聊天分析记录"
+        }.onFailure {
+            binding.textAnalysisCount.text = "读取分析记录数失败"
+        }
+    }
+
+    private fun exportAnalysisData() {
+        uiScope.launch {
+            binding.buttonExportAnalysis.isEnabled = false
+            binding.buttonExportAnalysis.text = "正在导出…"
+            try {
+                val zipFile = withContext(Dispatchers.IO) {
+                    AnalysisBackupManager.exportToZip(this@MainActivity)
+                }
+                // 分享 zip 文件
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    this@MainActivity,
+                    "${packageName}.fileprovider",
+                    zipFile
+                )
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(intent, "导出聊天分析备份"))
+                Toast.makeText(this@MainActivity, "导出成功：${zipFile.name}", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                MoodLog.e("EXPORT_ANALYSIS_FAILED", e)
+                Toast.makeText(this@MainActivity, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                binding.buttonExportAnalysis.isEnabled = true
+                binding.buttonExportAnalysis.text = "导出分析数据"
+                updateAnalysisCount()
+            }
+        }
+    }
+
+    private fun importAnalysisData() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "application/zip"
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        startActivityForResult(Intent.createChooser(intent, "选择聊天分析备份文件"), REQUEST_IMPORT_ANALYSIS)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_IMPORT_ANALYSIS && resultCode == RESULT_OK) {
+            data?.data?.let { uri ->
+                uiScope.launch {
+                    binding.buttonImportAnalysis.isEnabled = false
+                    binding.buttonImportAnalysis.text = "正在导入…"
+                    try {
+                        val imported = withContext(Dispatchers.IO) {
+                            AnalysisBackupManager.importFromZip(this@MainActivity, uri)
+                        }
+                        Toast.makeText(this@MainActivity, "导入成功，新增 $imported 条分析记录", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        MoodLog.e("IMPORT_ANALYSIS_FAILED", e)
+                        Toast.makeText(this@MainActivity, "导入失败：${e.message}", Toast.LENGTH_LONG).show()
+                    } finally {
+                        binding.buttonImportAnalysis.isEnabled = true
+                        binding.buttonImportAnalysis.text = "导入分析数据"
+                        updateAnalysisCount()
+                    }
+                }
+            }
+        }
+    }
+
+    companion object {
+        private const val REQUEST_IMPORT_ANALYSIS = 1001
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

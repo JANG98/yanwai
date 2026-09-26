@@ -19,6 +19,15 @@
             android:grantUriPermissions="true"
             android:exported="true" />
 
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="dev.jev.wechatmood.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- 旧的 Xposed API 用这三个 meta-data；现代 Module API 改用 META-INF/xposed/ -->
         <meta-data
             android:name="xposedmodule"

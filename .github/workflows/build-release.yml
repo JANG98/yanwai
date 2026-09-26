@@ -1,0 +1,353 @@
+# =============================================================================
+# 言外 · Yanwai — 自动构建、签名、发布与邮件通知工作流
+# =============================================================================
+#
+# 【触发方式】
+#   1. 推送 tag：git tag v1.3.0 && git push origin v1.3.0
+#   2. 手动触发：GitHub 仓库 Actions 页面点击 "Run workflow"
+#
+# 【需要在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置的 Secrets】
+# -----------------------------------------------------------------------------
+# 签名相关（必须配置，否则 Release 包无法签名）：
+#   SIGNING_KEYSTORE_BASE64   签名密钥库文件的 base64 编码内容
+#                             生成方法：base64 -w0 your-keystore.jks > keystore_b64.txt
+#                             然后把 txt 里的内容粘贴到 Secret 值中
+#   SIGNING_KEYSTORE_PASSWORD 密钥库密码（keystore password）
+#   SIGNING_KEY_ALIAS         密钥别名（key alias）
+#   SIGNING_KEY_PASSWORD      密钥密码（key password，通常和 keystore 密码相同）
+#
+# 邮件通知相关（必须配置，否则构建日志邮件无法发送）：
+#   SMTP_HOST                 SMTP 服务器地址，例如 smtp.qq.com / smtp.gmail.com / smtp.163.com
+#   SMTP_PORT                 SMTP 端口，SSL 用 465，TLS/STARTTLS 用 587
+#   SMTP_USERNAME             发件邮箱账号，例如 yourname@qq.com
+#   SMTP_PASSWORD             邮箱授权码（不是登录密码！QQ邮箱/163邮箱需在设置中开启SMTP并获取授权码）
+#   MAIL_TO                   收件人邮箱，多个用逗号分隔，例如 a@qq.com,b@163.com
+#
+# 【自动提供的 Secrets（无需手动配置）】
+#   GITHUB_TOKEN              GitHub 自动生成，用于创建 Release 和上传资产
+#
+# 【工作流步骤说明】
+#   1. 检出代码
+#   2. 设置 JDK 17
+#   3. 缓存 Gradle 依赖加速构建
+#   4. 构建 Release APK（未签名）
+#   5. 从 base64 解码密钥库并签名 APK
+#   6. 对齐优化 APK（zipalign）
+#   7. 创建 GitHub Release 并上传签名后的 APK
+#   8. 生成更新日志（基于 git commit 历史）
+#   9. 通过 SMTP 发送构建结果和更新日志邮件
+# =============================================================================
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # 推送 v 开头的 tag 时触发，例如 v1.3.0
+  workflow_dispatch:  # 支持手动触发
+    inputs:
+      release_version:
+        description: '发布版本号（例如 1.3.0），留空则使用最新 tag'
+        required: false
+        default: ''
+
+env:
+  APP_NAME: yanwai
+  APK_UNSIGNED: app/build/outputs/apk/release/app-release-unsigned.apk
+  APK_SIGNED: app/build/outputs/apk/release/yanwai-release.apk
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 需要写权限来创建 Release 和上传资产
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. 检出代码
+      # ---------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 获取完整历史，用于生成更新日志
+
+      # ---------------------------------------------------------------
+      # 2. 设置 JDK 17（项目要求 JDK 17+）
+      # ---------------------------------------------------------------
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # ---------------------------------------------------------------
+      # 3. 缓存 Gradle 依赖
+      # ---------------------------------------------------------------
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ---------------------------------------------------------------
+      # 4. 授予 Gradle Wrapper 执行权限并构建 Release APK
+      # ---------------------------------------------------------------
+      - name: Build Release APK
+        run: |
+          chmod +x gradlew 2>/dev/null || true
+          # 如果项目没有 gradle wrapper，使用系统 gradle
+          if [ -f "./gradlew" ]; then
+            ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          else
+            gradle :app:assembleRelease --no-daemon --stacktrace
+          fi
+          echo "构建完成，未签名 APK 路径: $APK_UNSIGNED"
+          ls -la app/build/outputs/apk/release/
+
+      # ---------------------------------------------------------------
+      # 5. 对齐优化 APK（zipalign，必须在签名之前！v2签名对整个文件哈希，签名后再对齐会破坏v2签名）
+      # ---------------------------------------------------------------
+      - name: Zipalign APK
+        run: |
+          ZIPALIGN=$(find $ANDROID_HOME/build-tools -name "zipalign" | sort -V | tail -1)
+          if [ -n "$ZIPALIGN" ]; then
+            echo "使用 zipalign: $ZIPALIGN"
+            "$ZIPALIGN" -v -p 4 "$APK_UNSIGNED" "${APK_UNSIGNED}.aligned"
+            mv "${APK_UNSIGNED}.aligned" "$APK_UNSIGNED"
+            echo "APK 对齐优化完成"
+          else
+            echo "未找到 zipalign，跳过对齐步骤（不影响安装使用）"
+          fi
+          ls -la "$APK_UNSIGNED"
+
+      # ---------------------------------------------------------------
+      # 6. 解码签名密钥库并签名 APK（v1+v2+v3 全方案签名）
+      #    密钥库通过 SIGNING_KEYSTORE_BASE64 环境变量传入，解码为临时文件
+      # ---------------------------------------------------------------
+      - name: Sign APK
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          # 去除 Secret 中可能的换行符（gh secret set 从 stdin 读取时会保留末尾换行）
+          SIGNING_KEYSTORE_BASE64=$(echo "$SIGNING_KEYSTORE_BASE64" | tr -d '\n\r')
+          SIGNING_KEYSTORE_PASSWORD=$(echo "$SIGNING_KEYSTORE_PASSWORD" | tr -d '\n\r')
+          SIGNING_KEY_ALIAS=$(echo "$SIGNING_KEY_ALIAS" | tr -d '\n\r')
+          SIGNING_KEY_PASSWORD=$(echo "$SIGNING_KEY_PASSWORD" | tr -d '\n\r')
+          echo "签名配置: keystore长度=${#SIGNING_KEYSTORE_BASE64} alias=$SIGNING_KEY_ALIAS"
+
+          # 检查签名密钥是否配置
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "::error::未配置 SIGNING_KEYSTORE_BASE64 Secret，无法签名！"
+            echo "请在仓库 Settings → Secrets and variables → Actions 中配置签名相关 Secrets。"
+            exit 1
+          fi
+
+          # 从 base64 解码密钥库到临时文件
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > /tmp/signing-keystore.jks
+          echo "密钥库已解码，大小: $(wc -c < /tmp/signing-keystore.jks) 字节"
+
+          # 使用 Android SDK 的 apksigner 签名
+          # 先找到 build-tools 中的 apksigner
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name "apksigner" | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "未找到 apksigner，尝试使用 sdkmanager 安装 build-tools"
+            yes | sdkmanager --install "build-tools;34.0.0" 2>/dev/null || true
+            APKSIGNER=$(find $ANDROID_HOME/build-tools -name "apksigner" | sort -V | tail -1)
+          fi
+          echo "使用 apksigner: $APKSIGNER"
+
+          # 签名（v1+v2 全方案，兼容 Android 4.0+；v3用于密钥轮替，普通应用不需要且JKS格式下可能导致v1/v2验证失败）
+          "$APKSIGNER" sign \
+            --ks /tmp/signing-keystore.jks \
+            --ks-pass pass:"$SIGNING_KEYSTORE_PASSWORD" \
+            --ks-key-alias "$SIGNING_KEY_ALIAS" \
+            --key-pass pass:"$SIGNING_KEY_PASSWORD" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            --out "$APK_SIGNED" \
+            "$APK_UNSIGNED"
+
+          echo "APK 签名完成: $APK_SIGNED"
+          ls -la "$APK_SIGNED"
+
+          # 验证签名（显示 v1/v2/v3 状态）
+          "$APKSIGNER" verify --verbose "$APK_SIGNED"
+
+          # 清理临时密钥库（安全考虑）
+          rm -f /tmp/signing-keystore.jks
+          echo "临时密钥库已清理"
+
+      # ---------------------------------------------------------------
+      # 7. 确定版本号
+      # ---------------------------------------------------------------
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.release_version }}" ]; then
+            VERSION="${{ github.event.inputs.release_version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(date +%Y%m%d-%H%M%S)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "发布版本: $VERSION"
+
+      # ---------------------------------------------------------------
+      # 8. 生成更新日志（基于 git commit 历史）
+      # ---------------------------------------------------------------
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # 获取上一个 tag 到当前的 commit 列表
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "对比版本: $PREV_TAG → ${{ steps.version.outputs.version }}"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD 2>/dev/null || echo "暂无更新记录")
+          else
+            echo "首次发布或无历史 tag"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" -20 2>/dev/null || echo "暂无更新记录")
+          fi
+
+          # 写入文件供后续步骤使用
+          {
+            echo "## 言外 v${{ steps.version.outputs.version }} 发布说明"
+            echo ""
+            echo "**发布时间**: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "**构建编号**: ${{ github.run_number }}"
+            echo "**Commit**: ${{ github.sha }}"
+            echo ""
+            echo "### 更新内容"
+            echo "$CHANGELOG"
+            echo ""
+            echo "### 安装说明"
+            echo "1. 下载下方 yanwai-v${{ steps.version.outputs.version }}.apk"
+            echo "2. 在手机上安装（需允许未知来源）"
+            echo "3. 在 LSPosed 中启用模块并选择微信作用域"
+            echo "4. 重启微信"
+          } > /tmp/changelog.md
+
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          cat /tmp/changelog.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          cat /tmp/changelog.md
+
+      # ---------------------------------------------------------------
+      # 9. 创建 GitHub Release 并上传签名 APK
+      # ---------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: 言外 v${{ steps.version.outputs.version }}
+          body_path: /tmp/changelog.md
+          files: |
+            ${{ env.APK_SIGNED }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # 10. 发送构建结果和更新日志邮件
+      #     通过 SMTP 发送，支持 SSL(465) 和 STARTTLS(587)
+      # ---------------------------------------------------------------
+      - name: Send email notification
+        if: always()   # 无论成功失败都发送邮件
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          BUILD_STATUS: ${{ job.status }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # 去除 Secret 中可能的换行符（gh secret set 从 stdin 读取时会保留末尾换行）
+          SMTP_HOST=$(echo "$SMTP_HOST" | tr -d '\n\r')
+          SMTP_PORT=$(echo "$SMTP_PORT" | tr -d '\n\r')
+          SMTP_USERNAME=$(echo "$SMTP_USERNAME" | tr -d '\n\r')
+          SMTP_PASSWORD=$(echo "$SMTP_PASSWORD" | tr -d '\n\r')
+          MAIL_TO=$(echo "$MAIL_TO" | tr -d '\n\r')
+          echo "SMTP 配置: host=$SMTP_HOST port=$SMTP_PORT from=$SMTP_USERNAME to=$MAIL_TO"
+
+          # 检查邮件配置
+          if [ -z "$SMTP_HOST" ] || [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ] || [ -z "$MAIL_TO" ]; then
+            echo "::warning::未配置邮件相关 Secrets，跳过邮件发送。"
+            echo "如需邮件通知，请配置 SMTP_HOST、SMTP_PORT、SMTP_USERNAME、SMTP_PASSWORD、MAIL_TO。"
+            exit 0
+          fi
+
+          # 构建邮件内容
+          STATUS_TEXT=$([ "$BUILD_STATUS" = "success" ] && echo "✅ 构建成功" || echo "❌ 构建失败")
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+
+          {
+            echo "From: 言外构建机器人 <$SMTP_USERNAME>"
+            echo "To: $MAIL_TO"
+            echo "Subject: [言外构建] v${VERSION} - $STATUS_TEXT"
+            echo "Content-Type: text/plain; charset=UTF-8"
+            echo "MIME-Version: 1.0"
+            echo ""
+            echo "========================================"
+            echo "  言外 · Yanwai 自动构建通知"
+            echo "========================================"
+            echo ""
+            echo "版本: v${VERSION}"
+            echo "状态: $STATUS_TEXT"
+            echo "构建编号: ${{ github.run_number }}"
+            echo "触发者: ${{ github.actor }}"
+            echo "Commit: ${{ github.sha }}"
+            echo "构建时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            if [ "$BUILD_STATUS" = "success" ]; then
+              echo "📦 Release 地址: $RELEASE_URL"
+              echo ""
+              echo "----- 更新日志 -----"
+              cat /tmp/changelog.md
+            else
+              echo "构建失败，请查看 GitHub Actions 日志:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
+            echo ""
+            echo "========================================"
+            echo "此邮件由 GitHub Actions 自动发送，请勿直接回复。"
+          } > /tmp/email.txt
+
+          # 根据端口选择发送方式
+          CURL_EXIT=0
+          if [ "$SMTP_PORT" = "465" ]; then
+            # SSL 方式
+            echo "使用 SSL 方式发送邮件 (端口 465)..."
+            curl -v --url "smtps://$SMTP_HOST:$SMTP_PORT" \
+              --ssl-reqd \
+              --mail-from "$SMTP_USERNAME" \
+              --mail-rcpt "$MAIL_TO" \
+              --user "$SMTP_USERNAME:$SMTP_PASSWORD" \
+              --upload-file /tmp/email.txt || CURL_EXIT=$?
+          else
+            # STARTTLS 方式（默认 587）
+            echo "使用 STARTTLS 方式发送邮件 (端口 $SMTP_PORT)..."
+            curl -v --url "smtp://$SMTP_HOST:$SMTP_PORT" \
+              --ssl-reqd \
+              --mail-from "$SMTP_USERNAME" \
+              --mail-rcpt "$MAIL_TO" \
+              --user "$SMTP_USERNAME:$SMTP_PASSWORD" \
+              --upload-file /tmp/email.txt || CURL_EXIT=$?
+          fi
+
+          if [ $CURL_EXIT -eq 0 ]; then
+            echo "邮件发送成功至: $MAIL_TO"
+          else
+            echo "::warning::邮件发送失败，curl 退出码: $CURL_EXIT，请检查 SMTP 配置。"
+          fi
+
+          # 清理临时文件
+          rm -f /tmp/email.txt /tmp/changelog.md

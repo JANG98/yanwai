@@ -36,6 +36,36 @@ class SettingsProvider : ContentProvider() {
                     }.apply()
                 Bundle()
             }
+            // 聊天分析持久化：微信进程通过这些方法读写言外进程的分析数据
+            "analysis_save" -> {
+                extras?.getString("record")?.let { ChatAnalysisStore.importRecord(ctx, it) }
+                Bundle()
+            }
+            "analysis_find" -> {
+                val mood = ChatAnalysisStore.findByKeyLocal(ctx, arg ?: "")
+                if (mood != null) {
+                    Bundle().apply {
+                        putString("label", mood.label)
+                        putDouble("score", mood.score)
+                        putInt("risk", mood.risk)
+                        putString("raw", mood.raw)
+                        putString("detail", mood.detail)
+                        putString("replies", org.json.JSONArray(mood.replies).toString())
+                    }
+                } else Bundle()
+            }
+            "analysis_warmup" -> {
+                ChatAnalysisStore.warmup(ctx)
+                val allRecords = mutableListOf<ChatAnalysisStore.StoredAnalysis>()
+                // 从内存缓存获取所有记录
+                val count = ChatAnalysisStore.totalCountLocal(ctx)
+                Bundle().apply {
+                    putInt("count", count)
+                }
+            }
+            "analysis_count" -> {
+                Bundle().apply { putInt("count", ChatAnalysisStore.totalCountLocal(ctx)) }
+            }
             else -> throw IllegalArgumentException("Unknown method")
         }
     }

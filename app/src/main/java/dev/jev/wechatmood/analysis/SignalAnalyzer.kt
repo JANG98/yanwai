@@ -10,15 +10,28 @@ object SignalAnalyzer {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = JevHttpClient()
     private val stages = ConcurrentHashMap<String, String>()
+    @Volatile private var appContext: android.content.Context? = null
+
+    fun init(context: android.content.Context) {
+        appContext = context.applicationContext
+        // 预热聊天分析缓存
+        runCatching { ChatAnalysisStore.warmup(context.applicationContext) }
+    }
+
     private val queue = AnalysisQueue(scope, ModulePrefs::canAnalyze, { input ->
         ModulePrefs.requestReload()
         analyze(input) {
             ModulePrefs.requestReload()
             ModulePrefs.canAnalyze(input)
         }
-    }, onComplete = { mood ->
+    }, onComplete = { input, mood ->
         MoodLog.i("Jev 闲聊解读完成：${mood.label}")
         ModulePrefs.report("Jev 分析完成，已缓存 ${MoodStore.size()} 条")
+        // 持久化保存分析结果
+        appContext?.let { ctx ->
+            runCatching { ChatAnalysisStore.save(ctx, input, mood) }
+                .onFailure { MoodLog.e("ANALYSIS_PERSIST_FAILED", it) }
+        }
     }, onFailure = { error ->
         MoodLog.e("分析失败：${error.message}")
         ModulePrefs.report("分析失败：${error.message}")

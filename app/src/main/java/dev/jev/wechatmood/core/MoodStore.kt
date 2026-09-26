@@ -14,6 +14,7 @@ data class Mood(
     val risk: Int,
     val raw: String,
     val detail: String = label,
+    val replies: List<String> = emptyList(),
 )
 
 /**

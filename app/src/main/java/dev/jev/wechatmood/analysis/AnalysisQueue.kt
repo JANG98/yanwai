@@ -12,7 +12,7 @@ class AnalysisQueue(
     private val scope: CoroutineScope,
     private val canAnalyze: (AnalysisInput) -> Boolean,
     private val analyze: suspend (AnalysisInput) -> Mood,
-    private val onComplete: (Mood) -> Unit = {},
+    private val onComplete: (AnalysisInput, Mood) -> Unit = { _, _ -> },
     private val onFailure: (Exception) -> Unit = {},
 ) {
     private class Entry(val input: AnalysisInput, val claim: MoodStore.Claim, val visible: () -> Boolean) {
@@ -52,7 +52,7 @@ class AnalysisQueue(
                     if (entries[entry.claim.key] !== entry || !canAnalyze(entry.input) || !entry.visible()) false
                     else MoodStore.complete(entry.claim, mood).also { if (it) failures.remove(entry.claim.key) }
                 }
-                if (accepted) runCatching { onComplete(mood) }
+                if (accepted) runCatching { onComplete(entry.input, mood) }
             }
         } catch (e: CancellationException) {
             throw e

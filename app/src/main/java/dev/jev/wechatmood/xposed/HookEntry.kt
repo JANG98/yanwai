@@ -14,6 +14,7 @@ import dev.jev.wechatmood.BuildConfig
 import dev.jev.wechatmood.core.ModulePrefs
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
+import dev.jev.wechatmood.analysis.SignalAnalyzer
 import dev.jev.wechatmood.hook.MessageSniffer
 import dev.jev.wechatmood.hook.ReplyDatabaseHistory
 
@@ -62,6 +63,7 @@ class HookEntry : IXposedHookLoadPackage {
             MoodLog.init(context)
             MoodLog.i("ENVIRONMENT\n${Diagnostics.environment(context)}")
             ModulePrefs.init(context)
+            SignalAnalyzer.init(context)
             MoodLog.i("微信主进程已加载模块 ${BuildConfig.VERSION_NAME}")
             ModulePrefs.report("模块 ${BuildConfig.VERSION_NAME} 已加载，等待打开聊天")
             ReplyDatabaseHistory.install(context.classLoader)
