@@ -79,6 +79,9 @@
                     style="@style/Yanwai.Button.Outline" android:layout_width="0dp" android:layout_height="wrap_content"
                     android:layout_weight="1" android:text="从GitHub下载" />
             </LinearLayout>
+            <com.google.android.material.button.MaterialButton android:id="@+id/buttonImportSkill"
+                style="@style/Yanwai.Button.Outline" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:text="从文件导入技能（SKILL.md）" />
 
             <TextView android:id="@+id/modelSection" style="@style/Yanwai.Section" android:text="模型连接" />
             <TextView android:id="@+id/textModelStatus" style="@style/Yanwai.Body" android:text="先选择渠道，再填写对应的 API Key。" />

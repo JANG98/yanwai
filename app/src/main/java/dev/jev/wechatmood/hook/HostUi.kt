@@ -116,14 +116,15 @@ class HostUi(private val activity: Activity) {
         if (dialog?.isShowing == true) return
         val hasTalker = currentTalker.isNotBlank()
         val relation = if (hasTalker) ChatProfileStore.getRelationship(activity, currentTalker) else ""
+        val currentSkillId = if (hasTalker) ChatSkillStore.getSkillId(activity, currentTalker) else null
         val items = if (hasTalker) {
-            arrayOf("分析本屏", "设置关系描述", "助手设置", "导出运行日志")
+            arrayOf("分析本屏", "设置关系描述", "加载 skill", "助手设置", "导出运行日志")
         } else {
             arrayOf("分析本屏", "助手设置", "导出运行日志")
         }
         dialog = AlertDialog.Builder(activity).setTitle("言外 · $status")
             .setItems(items) { _, which ->
-                val offset = if (hasTalker) 0 else 1
+                val offset = if (hasTalker) 0 else 2
                 when (which + offset) {
                     0 -> {
                         // 分析本屏：开启当前聊天的会话级开关 + 全局绘制开关
@@ -137,11 +138,48 @@ class HostUi(private val activity: Activity) {
                         } else Diagnostics.showFailure(activity, "分析开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
                     }
                     1 -> if (hasTalker) showRelationshipDialog(relation)
-                    2 -> openSettings()
-                    3 -> Diagnostics.show(activity)
+                    2 -> if (hasTalker) showSkillDialog(currentSkillId)
+                    3 -> openSettings()
+                    4 -> Diagnostics.show(activity)
                 }
             }
             .setNegativeButton("关闭", null).create().also { it.show() }
+    }
+
+    /**
+     * 弹出技能选择对话框，让用户为当前聊天选择一个技能。
+     */
+    private fun showSkillDialog(currentSkillId: String?) {
+        val prefs = activity.getSharedPreferences(dev.jev.wechatmood.core.ModulePrefs.FILE_NAME, android.content.Context.MODE_PRIVATE)
+        val allSkills = dev.jev.wechatmood.core.SkillStore.loadAll(prefs)
+        val enabledSkills = allSkills.filter { it.enabled }
+
+        if (enabledSkills.isEmpty()) {
+            android.widget.Toast.makeText(activity,
+                "还没有已开启的技能，请先在设置中开启技能",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val skillNames = enabledSkills.map { it.name }.toTypedArray()
+        val currentIndex = enabledSkills.indexOfFirst { it.id == currentSkillId }
+
+        AlertDialog.Builder(activity)
+            .setTitle("为当前聊天选择技能")
+            .setSingleChoiceItems(skillNames, currentIndex) { dialog, which ->
+                val selected = enabledSkills[which]
+                ChatSkillStore.setSkillId(activity, currentTalker, selected.id)
+                android.widget.Toast.makeText(activity,
+                    "已为当前聊天加载技能：${selected.name}",
+                    android.widget.Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNeutralButton("清除技能") { _, _ ->
+                ChatSkillStore.clearSkill(activity, currentTalker)
+                android.widget.Toast.makeText(activity, "已清除当前聊天的技能", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     /**

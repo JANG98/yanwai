@@ -8,15 +8,16 @@ import org.json.JSONObject
 /**
  * 技能（Skill）存储。
  *
+ * 支持仓库-技能两级结构：
+ * - 仓库（SkillRepository）：从 GitHub 下载的技能库，只是容器
+ * - 技能（Skill）：仓库中的单个 SKILL.md 文件，可以独立开关
+ *
  * 以 JSON 数组形式保存在 SharedPreferences 中，支持增删改查和启用/禁用。
  * 技能列表随设置同步广播发送给微信进程，分析时读取已启用的技能。
- *
- * 支持两种来源的技能：
- * - custom：用户在应用内手动创建的简单技能
- * - library：从 GitHub 下载的完整 skill 仓库（文件存储在 files/skills/ 目录）
  */
 object SkillStore {
     private const val KEY_SKILLS = "skills_json"
+    private const val KEY_REPOSITORIES = "skill_repositories_json"
     private const val KEY_SKILL_ENABLED = "skill_feature_enabled"
 
     /** 技能功能总开关：关闭时即使有已启用的技能也不生效。 */
@@ -26,6 +27,66 @@ object SkillStore {
     fun setFeatureEnabled(prefs: SharedPreferences, enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SKILL_ENABLED, enabled).apply()
     }
+
+    // ==================== 仓库管理 ====================
+
+    fun loadRepositories(prefs: SharedPreferences): List<SkillRepository> {
+        val raw = prefs.getString(KEY_REPOSITORIES, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                SkillRepository(
+                    id = obj.getString("id"),
+                    name = obj.getString("name"),
+                    url = obj.optString("url", ""),
+                    dirName = obj.optString("dirName", ""),
+                    version = obj.optString("version", ""),
+                    skillCount = obj.optInt("skillCount", 0),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveRepositories(prefs: SharedPreferences, repos: List<SkillRepository>) {
+        val arr = JSONArray()
+        repos.forEach { r ->
+            arr.put(JSONObject()
+                .put("id", r.id)
+                .put("name", r.name)
+                .put("url", r.url)
+                .put("dirName", r.dirName)
+                .put("version", r.version)
+                .put("skillCount", r.skillCount))
+        }
+        prefs.edit().putString(KEY_REPOSITORIES, arr.toString()).apply()
+    }
+
+    fun addRepository(prefs: SharedPreferences, repo: SkillRepository): List<SkillRepository> {
+        val all = loadRepositories(prefs).toMutableList()
+        all.add(repo)
+        saveRepositories(prefs, all)
+        return all
+    }
+
+    fun deleteRepository(context: Context, prefs: SharedPreferences, repoId: String): List<SkillRepository> {
+        val repo = loadRepositories(prefs).firstOrNull { it.id == repoId }
+        // 删除仓库下的所有技能
+        val skills = loadAll(prefs).filter { it.repositoryId != repoId }
+        saveAll(prefs, skills)
+        // 删除本地文件目录
+        if (repo?.dirName?.isNotBlank() == true) {
+            SkillDownloader.deleteSkillDir(context, repo.dirName)
+        }
+        val repos = loadRepositories(prefs).filter { it.id != repoId }
+        saveRepositories(prefs, repos)
+        return repos
+    }
+
+    fun skillsOfRepository(prefs: SharedPreferences, repositoryId: String): List<Skill> =
+        loadAll(prefs).filter { it.repositoryId == repositoryId }
+
+    // ==================== 技能管理 ====================
 
     fun loadAll(prefs: SharedPreferences): List<Skill> {
         val raw = prefs.getString(KEY_SKILLS, null) ?: return emptyList()
@@ -41,8 +102,8 @@ object SkillStore {
                     enabled = obj.optBoolean("enabled", true),
                     source = obj.optString("source", Skill.SOURCE_CUSTOM),
                     version = obj.optString("version", ""),
-                    dirName = obj.optString("dirName", ""),
-                    repoUrl = obj.optString("repoUrl", ""),
+                    repositoryId = obj.optString("repositoryId", ""),
+                    filePath = obj.optString("filePath", ""),
                 )
             }
         }.getOrDefault(emptyList())
@@ -70,8 +131,8 @@ object SkillStore {
                 .put("enabled", s.enabled)
                 .put("source", s.source)
                 .put("version", s.version)
-                .put("dirName", s.dirName)
-                .put("repoUrl", s.repoUrl))
+                .put("repositoryId", s.repositoryId)
+                .put("filePath", s.filePath))
         }
         prefs.edit().putString(KEY_SKILLS, arr.toString()).apply()
     }
@@ -79,6 +140,14 @@ object SkillStore {
     fun add(prefs: SharedPreferences, skill: Skill): List<Skill> {
         val all = loadAll(prefs).toMutableList()
         all.add(skill)
+        saveAll(prefs, all)
+        return all
+    }
+
+    /** 批量添加技能（下载仓库后使用） */
+    fun addAll(prefs: SharedPreferences, skills: List<Skill>): List<Skill> {
+        val all = loadAll(prefs).toMutableList()
+        all.addAll(skills)
         saveAll(prefs, all)
         return all
     }
@@ -93,17 +162,6 @@ object SkillStore {
         val all = loadAll(prefs).filter { it.id != id }
         saveAll(prefs, all)
         return all
-    }
-
-    /**
-     * 删除技能库技能，同时删除本地文件目录。
-     */
-    fun deleteLibrarySkill(context: Context, prefs: SharedPreferences, id: String): List<Skill> {
-        val skill = loadAll(prefs).firstOrNull { it.id == id }
-        if (skill?.isLibrarySkill == true && skill.dirName.isNotBlank()) {
-            SkillDownloader.deleteSkillDir(context, skill.dirName)
-        }
-        return delete(prefs, id)
     }
 
     fun toggle(prefs: SharedPreferences, id: String, enabled: Boolean): List<Skill> {
@@ -144,6 +202,18 @@ object SkillStore {
             }
             append("以上仅作为回复风格和角度的参考，必须严格按照题目要求的 JSON 格式输出，不能输出自由文本分析。")
         }
+    }
+
+    /**
+     * 获取指定技能的提示文本（用于按人配置技能时）。
+     */
+    fun skillPrompt(skill: Skill): String {
+        val effective = if (skill.isLibrarySkill) {
+            extractCorePrinciples(skill.prompt.ifBlank { skill.description })
+        } else {
+            skill.prompt.ifBlank { skill.description }
+        }
+        return effective.take(800)
     }
 
     /**

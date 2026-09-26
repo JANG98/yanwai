@@ -56,6 +56,17 @@ object SkillParser {
     }
 
     /**
+     * 从单个 SKILL.md 文件解析。
+     *
+     * @param file SKILL.md 文件
+     * @return 解析结果 Triple(name, description, prompt)
+     */
+    fun parseFromFile(file: File): Triple<String, String, String> {
+        val fallbackName = file.parentFile?.name ?: "未命名技能"
+        return parse(file.readText(), fallbackName)
+    }
+
+    /**
      * 从目录中查找并解析 SKILL.md。
      * 支持根目录和子目录中的 SKILL.md。
      *

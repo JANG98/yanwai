@@ -18,6 +18,7 @@ import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.hook.MessageSniffer
 import dev.jev.wechatmood.hook.SettingsEntryHook
+import dev.jev.wechatmood.hook.MainScreenEntry
 
 /** Direct package entry, independent of the optional initZygote callback. */
 class HookEntry : IXposedHookLoadPackage {
@@ -70,6 +71,7 @@ class HookEntry : IXposedHookLoadPackage {
             ChatAnalysisStore.warmup(context)
             SignalAnalyzer.init(context)
             SettingsEntryHook.install(context.classLoader)
+            MainScreenEntry.install(context.classLoader)
             MessageSniffer.install(context)
             installed = true
         }.onFailure {

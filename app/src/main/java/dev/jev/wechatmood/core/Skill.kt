@@ -1,17 +1,28 @@
 package dev.jev.wechatmood.core
 
 /**
- * 技能（Skill）定义。
+ * 技能仓库数据模型。
  *
- * 开启后，在输出回复建议时会将技能提示注入模型请求，
- * 让模型在选择下一步动作时参考技能设定的风格或规则。
+ * 一个仓库可以包含多个技能（SKILL.md 文件）。
+ * 仓库只是容器，真正起作用的是里面的单个技能。
+ */
+data class SkillRepository(
+    val id: String,
+    val name: String,
+    val url: String,
+    val dirName: String,
+    val version: String,
+    val skillCount: Int = 0,
+)
+
+/**
+ * 单个技能数据模型。
+ *
+ * 每个技能对应一个 SKILL.md 文件，可以独立开关。
+ * 技能可以属于某个仓库（source=library），也可以是用户自定义（source=custom）。
  *
  * 注意：技能只影响"建议"环节，不改变情绪判断和事件解读；
  * 也不会自动发送消息，仅作为模型选择候选动作时的参考约束。
- *
- * 支持两种来源：
- * - [SOURCE_CUSTOM]：用户在应用内手动创建的简单技能（名称+描述+提示词）
- * - [SOURCE_LIBRARY]：从 GitHub 下载的完整 skill 仓库（含 SKILL.md、references 等）
  */
 data class Skill(
     val id: String,
@@ -23,10 +34,10 @@ data class Skill(
     val source: String = SOURCE_CUSTOM,
     /** 版本号（library 来源时从仓库获取，custom 来源为空） */
     val version: String = "",
-    /** 本地存储目录名（library 来源时为 files/skills/ 下的子目录名，custom 来源为空） */
-    val dirName: String = "",
-    /** GitHub 仓库地址（library 来源时记录，用于更新；custom 来源为空） */
-    val repoUrl: String = "",
+    /** 所属仓库 ID（library 技能，custom 为空） */
+    val repositoryId: String = "",
+    /** 在仓库中的相对路径（library 技能，custom 为空） */
+    val filePath: String = "",
 ) {
     companion object {
         const val SOURCE_CUSTOM = "custom"

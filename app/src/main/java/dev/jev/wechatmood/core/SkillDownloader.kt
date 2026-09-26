@@ -14,7 +14,10 @@ import java.util.zip.ZipInputStream
  * GitHub Skill 下载器。
  *
  * 从 GitHub 仓库链接下载 skill 仓库（zip 格式），解压到本地技能库目录，
- * 并解析 SKILL.md 生成 Skill 对象。
+ * 扫描仓库中所有 SKILL.md 文件，解析为多个独立技能。
+ *
+ * 一个仓库可以包含多个技能（例如 goutoujunshi 仓库可能有多个子目录，
+ * 每个子目录都有自己的 SKILL.md）。
  *
  * 支持的链接格式：
  * - https://github.com/username/repo
@@ -32,16 +35,19 @@ object SkillDownloader {
      * 下载结果。
      */
     sealed class DownloadResult {
-        data class Success(val skill: Skill) : DownloadResult()
+        data class Success(
+            val repository: SkillRepository,
+            val skills: List<Skill>,
+        ) : DownloadResult()
         data class Error(val message: String) : DownloadResult()
     }
 
     /**
-     * 从 GitHub 链接下载 skill。
+     * 从 GitHub 链接下载 skill 仓库。
      *
      * @param context 上下文
      * @param githubUrl GitHub 仓库链接
-     * @return 下载结果
+     * @return 下载结果，包含仓库信息和解析出的技能列表
      */
     suspend fun download(context: Context, githubUrl: String): DownloadResult = withContext(Dispatchers.IO) {
         try {
@@ -89,32 +95,51 @@ object SkillDownloader {
 
             Log.d(TAG, "解压完成: ${targetDir.absolutePath}")
 
-            // 5. 查找实际包含 SKILL.md 的目录（zip 解压后通常有一层 repo-branch 目录）
-            val skillDir = findSkillDir(targetDir)
-                ?: return@withContext DownloadResult.Error("未找到 SKILL.md 文件，这可能不是一个标准的 skill 仓库")
+            // 5. 找到仓库实际根目录（zip 解压后通常有一层 repo-branch 目录）
+            val repoRoot = findRepoRoot(targetDir) ?: targetDir
 
-            Log.d(TAG, "找到 skill 目录: ${skillDir.absolutePath}")
+            Log.d(TAG, "仓库根目录: ${repoRoot.absolutePath}")
 
-            // 6. 解析 SKILL.md
-            val (name, description, prompt) = SkillParser.parseFromDir(skillDir)
-                ?: return@withContext DownloadResult.Error("解析 SKILL.md 失败")
+            // 6. 扫描所有 SKILL.md 文件
+            val skillFiles = findAllSkillFiles(repoRoot)
 
-            // 7. 生成 Skill 对象
-            val skill = Skill(
-                id = Skill.newId(),
-                name = name,
-                description = description.ifBlank { "从 GitHub 下载的技能：$owner/$repo" },
-                prompt = SkillParser.truncatePrompt(prompt),
-                enabled = false,
-                source = Skill.SOURCE_LIBRARY,
+            if (skillFiles.isEmpty()) {
+                return@withContext DownloadResult.Error("未找到任何 SKILL.md 文件，这可能不是一个标准的 skill 仓库")
+            }
+
+            Log.d(TAG, "找到 ${skillFiles.size} 个 SKILL.md 文件")
+
+            // 7. 创建仓库对象
+            val repositoryId = "repo_${System.currentTimeMillis()}"
+            val repository = SkillRepository(
+                id = repositoryId,
+                name = repo,
+                url = "https://github.com/$owner/$repo",
+                dirName = if (repoRoot != targetDir) "${targetDir.name}/${repoRoot.name}" else targetDir.name,
                 version = branch,
-                dirName = if (skillDir != targetDir) "${targetDir.name}/${skillDir.name}" else targetDir.name,
-                repoUrl = "https://github.com/$owner/$repo",
+                skillCount = skillFiles.size,
             )
 
-            Log.d(TAG, "技能解析完成: name=${skill.name}, prompt长度=${skill.prompt.length}")
+            // 8. 解析每个 SKILL.md 为技能
+            val skills = skillFiles.mapIndexed { index, skillFile ->
+                val (name, description, prompt) = SkillParser.parseFromFile(skillFile)
+                val relativePath = skillFile.relativeTo(repoRoot).path
+                Skill(
+                    id = "${repositoryId}_skill_$index",
+                    name = name.ifBlank { skillFile.parentFile?.name ?: "技能 $index" },
+                    description = description.ifBlank { "来自仓库 $repo 的技能：$relativePath" },
+                    prompt = SkillParser.truncatePrompt(prompt),
+                    enabled = false,
+                    source = Skill.SOURCE_LIBRARY,
+                    version = branch,
+                    repositoryId = repositoryId,
+                    filePath = relativePath,
+                )
+            }
 
-            DownloadResult.Success(skill)
+            Log.d(TAG, "解析完成: ${skills.size} 个技能")
+
+            DownloadResult.Success(repository, skills)
         } catch (e: Exception) {
             Log.e(TAG, "下载失败", e)
             DownloadResult.Error("下载失败: ${e.message ?: "未知错误"}")
@@ -217,32 +242,28 @@ object SkillDownloader {
     }
 
     /**
-     * 在解压后的目录中查找包含 SKILL.md 的目录。
-     * GitHub zip 解压后通常有一层 repo-branch 目录。
+     * 找到仓库实际根目录（zip 解压后通常有一层 repo-branch 目录）。
      */
-    private fun findSkillDir(rootDir: File): File? {
-        // 先检查根目录
-        if (File(rootDir, "SKILL.md").exists()) return rootDir
-
-        // 检查一级子目录
-        rootDir.listFiles()?.forEach { subDir ->
-            if (subDir.isDirectory && File(subDir, "SKILL.md").exists()) {
-                return subDir
-            }
+    private fun findRepoRoot(rootDir: File): File? {
+        // 如果根目录下只有一个子目录，且该子目录包含文件，则它可能是仓库根目录
+        val children = rootDir.listFiles() ?: return null
+        if (children.size == 1 && children[0].isDirectory) {
+            return children[0]
         }
-
-        // 检查二级子目录
-        rootDir.listFiles()?.forEach { subDir ->
-            if (subDir.isDirectory) {
-                subDir.listFiles()?.forEach { subSubDir ->
-                    if (subSubDir.isDirectory && File(subSubDir, "SKILL.md").exists()) {
-                        return subSubDir
-                    }
-                }
-            }
-        }
-
         return null
+    }
+
+    /**
+     * 递归扫描目录中所有 SKILL.md 文件。
+     */
+    private fun findAllSkillFiles(dir: File): List<File> {
+        val result = mutableListOf<File>()
+        dir.walkTopDown().forEach { file ->
+            if (file.isFile && file.name.equals("SKILL.md", ignoreCase = true)) {
+                result.add(file)
+            }
+        }
+        return result
     }
 
     /**

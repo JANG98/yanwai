@@ -76,7 +76,8 @@ object SignalAnalyzer {
         val job = currentCoroutineContext()
         // Keep both rounds on the same endpoint and credential, even if settings change mid-request.
         val settings = ModulePrefs.apiSettings()
-        val skillPrompt = ModulePrefs.activeSkillPrompt
+        // 优先使用按人配置的技能，如果没有配置则使用全局启用的技能
+        val skillPrompt = resolveSkillPrompt(input.talker)
         check(settings.isConfigured) { "请先在言外设置中填写并保存 API Key" }
         try {
             ChatAnalysis.analyze(input, settings.model, { client.exchange(it, settings) }, {
@@ -88,6 +89,29 @@ object SignalAnalyzer {
         } catch (e: IllegalArgumentException) {
             throw IllegalStateException("模型返回不完整，本次不显示判断")
         }
+    }
+
+    /**
+     * 解析技能提示词。
+     * 优先使用按人配置的技能，如果没有配置则使用全局启用的技能。
+     */
+    private fun resolveSkillPrompt(talker: String): String {
+        val context = appContext ?: return ModulePrefs.activeSkillPrompt ?: ""
+        // 检查是否为当前聊天配置了技能
+        val skillId = dev.jev.wechatmood.hook.ChatSkillStore.getSkillId(context, talker)
+        if (!skillId.isNullOrBlank()) {
+            val prefs = context.getSharedPreferences(ModulePrefs.FILE_NAME, Context.MODE_PRIVATE)
+            val skill = SkillStore.loadAll(prefs).firstOrNull { it.id == skillId && it.enabled }
+            if (skill != null) {
+                return buildString {
+                    append("【当前聊天已加载技能：${skill.name}，以下为该技能的核心原则，用于生成回复建议】\n\n")
+                    append(SkillStore.skillPrompt(skill))
+                    append("\n\n以上技能仅用于调整回复建议的风格和角度，必须严格按照题目要求的 JSON 格式输出。")
+                }
+            }
+        }
+        // 回退到全局启用的技能
+        return ModulePrefs.activeSkillPrompt ?: ""
     }
 
 }

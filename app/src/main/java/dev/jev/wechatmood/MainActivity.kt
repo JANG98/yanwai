@@ -50,7 +50,9 @@ class MainActivity : AppCompatActivity() {
     private var bindingInputs = false
     private var probeState = ProbeState.UNTESTED
     private var syncingSkills = false
+    private var currentRepositoryId: String? = null  // 当前查看的仓库 ID，null 表示显示仓库列表
     private lateinit var importAnalysisLauncher: androidx.activity.result.ActivityResultLauncher<String>
+    private lateinit var importSkillLauncher: androidx.activity.result.ActivityResultLauncher<String>
     private val stateListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (!isFinishing && !isDestroyed) refresh() }
     }
@@ -74,6 +76,10 @@ class MainActivity : AppCompatActivity() {
         // 初始化导入分析数据的文件选择器
         importAnalysisLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
             uri?.let { importAnalysisFromUri(it) }
+        }
+        // 初始化导入技能的文件选择器
+        importSkillLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
+            uri?.let { importSkillFromUri(it) }
         }
         // Makes the settings provider visible to WeChat on Android 11+.
         // The provider validates the caller UID before sharing settings with WeChat.
@@ -136,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.buttonAddSkill.setOnClickListener { showSkillDialog(null) }
         binding.buttonDownloadSkill.setOnClickListener { showDownloadSkillDialog() }
+        binding.buttonImportSkill.setOnClickListener { importSkillLauncher.launch("*/*") }
         renderSkillList()
         binding.buttonDebug.setOnClickListener {
             val open = binding.debugPanel.visibility != View.VISIBLE
@@ -456,11 +463,21 @@ class MainActivity : AppCompatActivity() {
         val container = binding.skillListContainer
         container.removeAllViews()
         val prefs = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
-        val skills = SkillStore.loadAll(prefs)
         val featureOn = SkillStore.isFeatureEnabled(prefs)
-        if (skills.isEmpty()) {
+
+        // 如果当前在查看某个仓库的详情，显示该仓库的技能列表
+        currentRepositoryId?.let { repoId ->
+            renderRepositorySkills(container, prefs, repoId, featureOn)
+            return
+        }
+
+        // 显示仓库列表 + 自定义技能
+        val repositories = SkillStore.loadRepositories(prefs)
+        val customSkills = SkillStore.customSkills(prefs)
+
+        if (repositories.isEmpty() && customSkills.isEmpty()) {
             val empty = TextView(this).apply {
-                text = "还没有技能。点击「添加技能」创建自定义技能，或「从GitHub下载」完整技能库（如恋爱军师 goutoujunshi）。"
+                text = "还没有技能。点击「添加技能」创建自定义技能，「从GitHub下载」技能仓库，或「从文件导入」单个技能。"
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
                 textSize = 13f
                 setPadding(0, dp(8), 0, dp(4))
@@ -468,11 +485,20 @@ class MainActivity : AppCompatActivity() {
             container.addView(empty)
             return
         }
-        skills.forEach { skill ->
+
+        // 显示仓库列表
+        repositories.forEach { repo ->
+            val repoSkills = SkillStore.skillsOfRepository(prefs, repo.id)
+            val enabledCount = repoSkills.count { it.enabled }
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setBackgroundResource(R.drawable.status_pill)
+                isClickable = true
+                setOnClickListener {
+                    currentRepositoryId = repo.id
+                    renderSkillList()
+                }
             }
             val topRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -482,97 +508,50 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
-            val nameView = TextView(this).apply {
-                text = skill.name
+            nameLayout.addView(TextView(this).apply {
+                text = "📦 ${repo.name}"
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
-            }
-            nameLayout.addView(nameView)
-            // 技能库来源标签
-            if (skill.isLibrarySkill) {
-                nameLayout.addView(TextView(this).apply {
-                    text = "📦 GitHub 技能库" + if (skill.version.isNotBlank()) " · ${skill.version}" else ""
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
-                    textSize = 11f
-                    setPadding(0, dp(2), 0, 0)
-                })
-            }
-            val toggle = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
-                isChecked = skill.enabled
-                isEnabled = featureOn
-                setOnCheckedChangeListener { _, value ->
-                    val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
-                    SkillStore.toggle(p, skill.id, value)
-                    SettingsProvider.save(this@MainActivity) { }
-                    ModulePrefs.reload(force = true)
-                }
-            }
+            })
+            nameLayout.addView(TextView(this).apply {
+                text = "${repoSkills.size} 个技能 · 已开启 $enabledCount 个" + if (repo.version.isNotBlank()) " · ${repo.version}" else ""
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                textSize = 11f
+                setPadding(0, dp(2), 0, 0)
+            })
             topRow.addView(nameLayout)
-            topRow.addView(toggle)
+            // 箭头
+            topRow.addView(TextView(this).apply {
+                text = "›"
+                textSize = 24f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            })
             row.addView(topRow)
-            if (skill.description.isNotBlank()) {
-                row.addView(TextView(this).apply {
-                    text = skill.description
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
-                    textSize = 13f
-                    setPadding(0, dp(2), 0, 0)
-                })
-            }
-            // 自定义技能显示提示词，技能库技能显示指令长度
-            if (skill.isLibrarySkill) {
-                row.addView(TextView(this).apply {
-                    text = "包含完整技能指令（${skill.prompt.length} 字符），开启后注入回复建议"
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
-                    textSize = 12f
-                    setPadding(0, dp(2), 0, 0)
-                })
-            } else if (skill.prompt.isNotBlank()) {
-                row.addView(TextView(this).apply {
-                    text = "提示：${skill.prompt}"
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
-                    textSize = 12f
-                    setPadding(0, dp(2), 0, 0)
-                })
-            }
+            // 删除仓库按钮
             val btnRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(0, dp(6), 0, 0)
             }
-            // 只有自定义技能可以编辑
-            if (!skill.isLibrarySkill) {
-                btnRow.addView(com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                    text = "编辑"
-                    textSize = 12f
-                    setOnClickListener { showSkillDialog(skill) }
-                })
-                btnRow.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
-            }
-            // 技能库技能可以查看仓库链接
-            if (skill.isLibrarySkill && skill.repoUrl.isNotBlank()) {
+            if (repo.url.isNotBlank()) {
                 btnRow.addView(com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                     text = "查看仓库"
                     textSize = 12f
                     setOnClickListener {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(skill.repoUrl)))
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(repo.url)))
                     }
                 })
                 btnRow.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
             }
             btnRow.addView(com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "删除"
+                text = "删除仓库"
                 textSize = 12f
                 setOnClickListener {
                     AlertDialog.Builder(this@MainActivity)
-                        .setTitle("删除技能")
-                        .setMessage("确定删除「${skill.name}」吗？此操作不可撤销。")
+                        .setTitle("删除仓库")
+                        .setMessage("确定删除仓库「${repo.name}」及其所有技能吗？此操作不可撤销。")
                         .setPositiveButton("删除") { _, _ ->
-                            val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
-                            if (skill.isLibrarySkill) {
-                                SkillStore.deleteLibrarySkill(this@MainActivity, p, skill.id)
-                            } else {
-                                SkillStore.delete(p, skill.id)
-                            }
+                            SkillStore.deleteRepository(this@MainActivity, prefs, repo.id)
                             SettingsProvider.save(this@MainActivity) { }
                             ModulePrefs.reload(force = true)
                             renderSkillList()
@@ -587,6 +566,173 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(8) })
+        }
+
+        // 显示自定义技能
+        customSkills.forEach { skill ->
+            val row = createSkillRow(skill, featureOn, prefs)
+            container.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) })
+        }
+    }
+
+    /**
+     * 渲染仓库详情（该仓库下的所有技能）。
+     */
+    private fun renderRepositorySkills(container: LinearLayout, prefs: android.content.SharedPreferences, repoId: String, featureOn: Boolean) {
+        val repo = SkillStore.loadRepositories(prefs).firstOrNull { it.id == repoId } ?: run {
+            currentRepositoryId = null
+            renderSkillList()
+            return
+        }
+        val skills = SkillStore.skillsOfRepository(prefs, repoId)
+
+        // 返回按钮
+        val backRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(8))
+            isClickable = true
+            setOnClickListener {
+                currentRepositoryId = null
+                renderSkillList()
+            }
+        }
+        backRow.addView(TextView(this).apply {
+            text = "‹ 返回"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        backRow.addView(TextView(this).apply {
+            text = "  ${repo.name}"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+        })
+        container.addView(backRow)
+
+        if (skills.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "该仓库没有技能。"
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                textSize = 13f
+                setPadding(0, dp(8), 0, dp(4))
+            })
+            return
+        }
+
+        skills.forEach { skill ->
+            val row = createSkillRow(skill, featureOn, prefs)
+            container.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) })
+        }
+    }
+
+    /**
+     * 创建单个技能的行视图。
+     */
+    private fun createSkillRow(skill: Skill, featureOn: Boolean, prefs: android.content.SharedPreferences): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundResource(R.drawable.status_pill)
+
+            val topRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val nameLayout = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            nameLayout.addView(TextView(this@MainActivity).apply {
+                text = skill.name
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+                textSize = 15f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+            if (skill.isLibrarySkill) {
+                nameLayout.addView(TextView(this@MainActivity).apply {
+                    text = "📦 技能库技能" + if (skill.filePath.isNotBlank()) " · ${skill.filePath}" else ""
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 11f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            val toggle = com.google.android.material.materialswitch.MaterialSwitch(this@MainActivity).apply {
+                isChecked = skill.enabled
+                isEnabled = featureOn
+                setOnCheckedChangeListener { _, value ->
+                    val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                    SkillStore.toggle(p, skill.id, value)
+                    SettingsProvider.save(this@MainActivity) { }
+                    ModulePrefs.reload(force = true)
+                }
+            }
+            topRow.addView(nameLayout)
+            topRow.addView(toggle)
+            addView(topRow)
+
+            if (skill.description.isNotBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = skill.description
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 13f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            if (skill.isLibrarySkill) {
+                addView(TextView(this@MainActivity).apply {
+                    text = "包含完整技能指令（${skill.prompt.length} 字符），开启后注入回复建议"
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 12f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            } else if (skill.prompt.isNotBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = "提示：${skill.prompt}"
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 12f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+
+            val btnRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(6), 0, 0)
+            }
+            if (!skill.isLibrarySkill) {
+                btnRow.addView(com.google.android.material.button.MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    text = "编辑"
+                    textSize = 12f
+                    setOnClickListener { showSkillDialog(skill) }
+                })
+                btnRow.addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+            }
+            btnRow.addView(com.google.android.material.button.MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "删除"
+                textSize = 12f
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("删除技能")
+                        .setMessage("确定删除「${skill.name}」吗？此操作不可撤销。")
+                        .setPositiveButton("删除") { _, _ ->
+                            val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                            SkillStore.delete(p, skill.id)
+                            SettingsProvider.save(this@MainActivity) { }
+                            ModulePrefs.reload(force = true)
+                            renderSkillList()
+                            Toast.makeText(this@MainActivity, "已删除", Toast.LENGTH_SHORT).show()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            })
+            addView(btnRow)
         }
     }
 
@@ -628,13 +774,14 @@ class MainActivity : AppCompatActivity() {
                 when (val result = SkillDownloader.download(this@MainActivity, url)) {
                     is SkillDownloader.DownloadResult.Success -> {
                         val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
-                        SkillStore.add(p, result.skill)
+                        SkillStore.addRepository(p, result.repository)
+                        SkillStore.addAll(p, result.skills)
                         SettingsProvider.save(this@MainActivity) { }
                         ModulePrefs.reload(force = true)
                         renderSkillList()
                         dialog.dismiss()
                         Toast.makeText(this@MainActivity,
-                            "已下载「${result.skill.name}」，在列表中开启即可使用",
+                            "已下载仓库「${result.repository.name}」，包含 ${result.skills.size} 个技能，点击仓库查看并开启",
                             Toast.LENGTH_LONG).show()
                     }
                     is SkillDownloader.DownloadResult.Error -> {
@@ -754,6 +901,41 @@ class MainActivity : AppCompatActivity() {
             }
         }.onFailure {
             MoodLog.e("IMPORT_ANALYSIS_FAILED", it)
+            runOnUiThread {
+                Toast.makeText(this, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * 从选择的文件导入技能（SKILL.md）。
+     */
+    private fun importSkillFromUri(uri: Uri) {
+        runCatching {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val content = input.bufferedReader().use { it.readText() }
+                val (name, description, prompt) = SkillParser.parse(content)
+                val skill = Skill(
+                    id = Skill.newId(),
+                    name = name,
+                    description = description.ifBlank { "从文件导入的技能" },
+                    prompt = SkillParser.truncatePrompt(prompt),
+                    enabled = false,
+                    source = Skill.SOURCE_CUSTOM,
+                )
+                val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                SkillStore.add(p, skill)
+                SettingsProvider.save(this) { }
+                ModulePrefs.reload(force = true)
+                runOnUiThread {
+                    renderSkillList()
+                    Toast.makeText(this, "已导入技能「${skill.name}」，在列表中开启即可使用", Toast.LENGTH_LONG).show()
+                }
+            } ?: run {
+                Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show()
+            }
+        }.onFailure {
+            MoodLog.e("IMPORT_SKILL_FAILED", it)
             runOnUiThread {
                 Toast.makeText(this, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
             }
