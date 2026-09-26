@@ -24,6 +24,7 @@ class HostUi(private val activity: Activity) {
     private var syncing = false
     private var status = ""
     private var messages = emptyList<AnalysisInput>()
+    private var currentTalker = ""
     private var dialog: AlertDialog? = null
     private var title: TextView? = null
     private var oldTitleWidth = Int.MAX_VALUE
@@ -33,15 +34,17 @@ class HostUi(private val activity: Activity) {
     private var settingsHost: View? = null
     private var settingsParams: ViewGroup.LayoutParams? = null
 
-    fun showStatus(value: String, current: List<AnalysisInput>) {
+    fun showStatus(value: String, current: List<AnalysisInput>, talker: String = "") {
         restoreSettings()
         status = value
         messages = current
+        currentTalker = talker
         ensureControl()
         syncing = true
         control?.apply {
             visibility = View.VISIBLE
-            isChecked = ModulePrefs.showBadge
+            // 绘制开关状态由当前聊天的会话级开关决定，而非全局开关
+            isChecked = if (talker.isNotBlank()) ChatSwitchStore.isEnabled(activity, talker) else ModulePrefs.showBadge
             contentDescription = "绘制分析结果；$value；长按打开分析与设置"
         }
         syncing = false
@@ -66,14 +69,22 @@ class HostUi(private val activity: Activity) {
             setPadding(dp(4), 0, dp(4), 0)
             setOnCheckedChangeListener { _, checked ->
                 if (!syncing) {
-                    if (!ModulePrefs.setSwitch(ModulePrefs.KEY_SHOW_BADGE, checked)) {
-                        syncing = true
-                        isChecked = ModulePrefs.showBadge
-                        syncing = false
-                        Diagnostics.showFailure(activity, "开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
+                    // 绘制开关只控制当前聊天的会话级分析开关
+                    if (currentTalker.isNotBlank()) {
+                        ChatSwitchStore.setEnabled(activity, currentTalker, checked)
+                        if (!checked) BubbleDecorator.clearAll()
+                        MessageSniffer.refresh()
+                    } else {
+                        // 没有当前聊天时（如设置页面），回退到全局开关
+                        if (!ModulePrefs.setSwitch(ModulePrefs.KEY_SHOW_BADGE, checked)) {
+                            syncing = true
+                            isChecked = ModulePrefs.showBadge
+                            syncing = false
+                            Diagnostics.showFailure(activity, "开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
+                        }
+                        if (!ModulePrefs.showBadge) BubbleDecorator.clearAll()
+                        MessageSniffer.refresh()
                     }
-                    if (!ModulePrefs.showBadge) BubbleDecorator.clearAll()
-                    MessageSniffer.refresh()
                 }
             }
             setOnLongClickListener { showActions(); true }
@@ -106,11 +117,17 @@ class HostUi(private val activity: Activity) {
         dialog = AlertDialog.Builder(activity).setTitle("言外 · $status")
             .setItems(arrayOf("分析本屏", "助手设置", "导出运行日志")) { _, which ->
                 when (which) {
-                    0 -> if (ModulePrefs.setSwitch(ModulePrefs.KEY_ENABLED, true) &&
-                        ModulePrefs.setSwitch(ModulePrefs.KEY_SHOW_BADGE, true)) {
-                        messages.forEach { SignalAnalyzer.retryFailure(it.key) }
-                        MessageSniffer.refresh()
-                    } else Diagnostics.showFailure(activity, "分析开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
+                    0 -> {
+                        // 分析本屏：开启当前聊天的会话级开关 + 全局绘制开关
+                        if (currentTalker.isNotBlank()) {
+                            ChatSwitchStore.setEnabled(activity, currentTalker, true)
+                        }
+                        if (ModulePrefs.setSwitch(ModulePrefs.KEY_ENABLED, true) &&
+                            ModulePrefs.setSwitch(ModulePrefs.KEY_SHOW_BADGE, true)) {
+                            messages.forEach { SignalAnalyzer.retryFailure(it.key) }
+                            MessageSniffer.refresh()
+                        } else Diagnostics.showFailure(activity, "分析开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
+                    }
                     1 -> openSettings()
                     2 -> Diagnostics.show(activity)
                 }

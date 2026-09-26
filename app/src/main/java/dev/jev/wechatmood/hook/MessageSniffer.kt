@@ -193,7 +193,12 @@ object MessageSniffer {
             IntArray(2).also { view.getLocationOnScreen(it) }[1]
         }.mapNotNull { (_, message) -> message.input }.distinctBy { it.key }
         visibleKeys = messages.map { it.key }.toSet()
-        if (ModulePrefs.canAnalyze) {
+        // 当前聊天的 talker（取第一条消息的 talker，同一聊天的消息 talker 相同）
+        val currentTalker = messages.firstOrNull()?.talker.orEmpty()
+        // 当前聊天是否开启了分析（会话级开关，默认关闭）
+        val chatEnabled = currentTalker.isNotBlank() && ChatSwitchStore.isEnabled(activity, currentTalker)
+
+        if (ModulePrefs.canAnalyze && chatEnabled) {
             for (message in messages) {
                 val key = message.key
                 SignalAnalyzer.submit(message) { key in visibleKeys }
@@ -201,7 +206,8 @@ object MessageSniffer {
         }
         BubbleDecorator.prune()
         var unsupported = 0
-        if (ModulePrefs.enabled && ModulePrefs.showBadge) {
+        // 气泡绘制：全局开关开启 AND 当前聊天会话级开关开启
+        if (ModulePrefs.enabled && ModulePrefs.showBadge && chatEnabled) {
             records.distinctBy { it.first }.forEach { (row, message) ->
                 runCatching {
                     if (!BubbleDecorator.show(row, message.input) && message.input != null) unsupported++
@@ -213,6 +219,7 @@ object MessageSniffer {
             !ModulePrefs.bridgeAvailable -> "设置连接失败，点此打开助手后重试"
             !ModulePrefs.enabled -> "分析已关闭，点此打开设置"
             ModulePrefs.apiKey.isBlank() -> "请打开言外填写并保存 API Key"
+            !chatEnabled -> "本聊天未开启分析，点击右上角「绘制」开关开启"
             records.isEmpty() -> "未识别到消息 · $adapterStatus"
             messages.isEmpty() -> "本屏无可分析文字，非纯文本及超过 1000 字符的消息已跳过"
             else -> {
@@ -227,7 +234,7 @@ object MessageSniffer {
         }
         val displayStatus = if (unsupported > 0) "$status；$unsupported 条气泡布局暂不支持绘制" else status
         report(displayStatus)
-        panel.showStatus("Jev · $displayStatus", if (ModulePrefs.enabled && ModulePrefs.showBadge) messages else emptyList())
+        panel.showStatus("Jev · $displayStatus", if (chatEnabled) messages else emptyList(), currentTalker)
     }
 
     private fun report(status: String) {
