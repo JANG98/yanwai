@@ -148,26 +148,55 @@ class HostUi(private val activity: Activity) {
 
     /**
      * 弹出技能选择对话框，让用户为当前聊天选择一个技能。
+     * 通过 ContentProvider 跨进程从言外进程获取已开启的技能列表。
      */
     private fun showSkillDialog(currentSkillId: String?) {
-        val prefs = activity.getSharedPreferences(dev.jev.wechatmood.core.ModulePrefs.FILE_NAME, android.content.Context.MODE_PRIVATE)
-        val allSkills = dev.jev.wechatmood.core.SkillStore.loadAll(prefs)
-        val enabledSkills = allSkills.filter { it.enabled }
+        // 通过 ContentProvider 跨进程获取已开启的技能列表
+        data class SkillInfo(val id: String, val name: String)
+        val skills = mutableListOf<SkillInfo>()
+        var featureEnabled = false
 
-        if (enabledSkills.isEmpty()) {
+        runCatching {
+            val result = activity.contentResolver.call(
+                dev.jev.wechatmood.core.SettingsProvider.URI,
+                "get_skills", null, null
+            )
+            if (result != null) {
+                featureEnabled = result.getBoolean("feature_enabled")
+                val json = result.getString("skills")
+                if (!json.isNullOrBlank()) {
+                    val arr = org.json.JSONArray(json)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        skills.add(SkillInfo(obj.getString("id"), obj.getString("name")))
+                    }
+                }
+            }
+        }.onFailure {
+            dev.jev.wechatmood.core.MoodLog.e("GET_SKILLS_FAILED", it)
+        }
+
+        if (!featureEnabled) {
             android.widget.Toast.makeText(activity,
-                "还没有已开启的技能，请先在设置中开启技能",
+                "回复技能功能未开启，请先在言外设置中开启「回复技能」总开关",
                 android.widget.Toast.LENGTH_LONG).show()
             return
         }
 
-        val skillNames = enabledSkills.map { it.name }.toTypedArray()
-        val currentIndex = enabledSkills.indexOfFirst { it.id == currentSkillId }
+        if (skills.isEmpty()) {
+            android.widget.Toast.makeText(activity,
+                "还没有已开启的技能，请先在言外设置中开启技能",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val skillNames = skills.map { it.name }.toTypedArray()
+        val currentIndex = skills.indexOfFirst { it.id == currentSkillId }
 
         AlertDialog.Builder(activity)
             .setTitle("为当前聊天选择技能")
             .setSingleChoiceItems(skillNames, currentIndex) { dialog, which ->
-                val selected = enabledSkills[which]
+                val selected = skills[which]
                 ChatSkillStore.setSkillId(activity, currentTalker, selected.id)
                 android.widget.Toast.makeText(activity,
                     "已为当前聊天加载技能：${selected.name}",

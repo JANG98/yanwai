@@ -98,6 +98,27 @@ class SettingsProvider : ContentProvider() {
                     Bundle().apply { putInt("count", count) }
                 } finally { Binder.restoreCallingIdentity(identity) }
             }
+            // 获取已开启的技能列表（跨进程：微信进程调用，言外进程返回）
+            "get_skills" -> {
+                val identity = Binder.clearCallingIdentity()
+                try {
+                    val prefs = ctx.getSharedPreferences(ModulePrefs.FILE_NAME, Context.MODE_PRIVATE)
+                    val featureEnabled = SkillStore.isFeatureEnabled(prefs)
+                    val skills = SkillStore.enabledSkills(prefs)
+                    val json = org.json.JSONArray().apply {
+                        skills.forEach { s ->
+                            put(org.json.JSONObject()
+                                .put("id", s.id)
+                                .put("name", s.name)
+                                .put("description", s.description))
+                        }
+                    }
+                    Bundle().apply {
+                        putBoolean("feature_enabled", featureEnabled)
+                        putString("skills", json.toString())
+                    }
+                } finally { Binder.restoreCallingIdentity(identity) }
+            }
             else -> throw IllegalArgumentException("Unknown method")
         }
     }
