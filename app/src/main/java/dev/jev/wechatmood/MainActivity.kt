@@ -30,6 +30,7 @@ import dev.jev.wechatmood.core.SettingsProvider
 import dev.jev.wechatmood.core.Skill
 import dev.jev.wechatmood.core.SkillStore
 import dev.jev.wechatmood.core.SkillDownloader
+import dev.jev.wechatmood.core.SkillParser
 import dev.jev.wechatmood.core.ChatAnalysisStore
 import dev.jev.wechatmood.core.AnalysisBackupManager
 import dev.jev.wechatmood.databinding.ActivityMainBinding
