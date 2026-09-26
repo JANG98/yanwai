@@ -119,10 +119,18 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
+          # 调试：输出 Secret 长度（不输出值本身）
+          echo "SIGNING_KEYSTORE_BASE64 长度: ${#SIGNING_KEYSTORE_BASE64}"
+          echo "SIGNING_KEYSTORE_PASSWORD 长度: ${#SIGNING_KEYSTORE_PASSWORD}"
+          echo "SIGNING_KEY_ALIAS 长度: ${#SIGNING_KEY_ALIAS}"
+          echo "SIGNING_KEY_PASSWORD 长度: ${#SIGNING_KEY_PASSWORD}"
+
           # 检查签名密钥是否配置
           if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
             echo "::error::未配置 SIGNING_KEYSTORE_BASE64 Secret，无法签名！"
-            echo "请在仓库 Settings → Secrets 中配置签名相关 Secrets。"
+            echo "请在仓库 Settings → Secrets and variables → Actions 中配置签名相关 Secrets。"
+            echo "当前可用的环境变量（不含值）:"
+            env | grep -i SIGNING | sed 's/=.*/=***/' || true
             exit 1
           fi
 
