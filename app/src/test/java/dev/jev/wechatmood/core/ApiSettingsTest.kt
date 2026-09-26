@@ -23,11 +23,19 @@ class ApiSettingsTest {
         assertEquals("my-jev", ApiSettings.fromInput("https://example.org/jev", "test", "custom", "my-jev").model)
     }
 
-    @Test fun `preset selection cannot accidentally keep the previous platform URL or model`() {
-        val settings = ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, "test", "openrouter", "jev-1.13.0")
+    @Test fun `preset selection cannot accidentally keep the previous platform URL`() {
+        val settings = ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, "test", "openrouter", "")
         assertEquals(JevProvider.OPENROUTER, settings.provider)
         assertEquals(JevProvider.OPENROUTER.endpoint, settings.endpoint)
+        // 模型名为空时使用渠道预设默认值
         assertEquals("typesafe/jev-1.13", settings.model)
+    }
+
+    @Test fun `preset provider allows custom model override`() {
+        // 所有渠道都允许用户自定义模型名，传入非空模型时使用用户值
+        val settings = ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, "test", "openrouter", "jev-1.13.0")
+        assertEquals(JevProvider.OPENROUTER, settings.provider)
+        assertEquals("jev-1.13.0", settings.model)
     }
 
     @Test fun `unknown hosts and nonstandard paths remain custom during migration`() {

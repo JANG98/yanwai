@@ -67,6 +67,11 @@ class SettingsProvider : ContentProvider() {
             val generation = prefs.getString(KEY_GENERATION, null) ?: UUID.randomUUID().toString().also {
                 check(prefs.edit().putString(KEY_GENERATION, it).commit())
             }
+            // 计算当前已启用技能的拼接提示，随设置快照一起同步给微信进程。
+            val skillEnabled = SkillStore.isFeatureEnabled(prefs)
+            val skillPrompt = if (skillEnabled) SkillStore.enabledSkills(prefs).joinToString("\n") { s ->
+                "- ${s.name}：${s.prompt.ifBlank { s.description }}"
+            } else ""
             return Bundle().apply {
                 putString(KEY_GENERATION, generation)
                 putLong(KEY_REVISION, prefs.getLong(KEY_REVISION, 0L))
@@ -77,6 +82,8 @@ class SettingsProvider : ContentProvider() {
                 putString(ModulePrefs.KEY_API_KEY, prefs.getString(ModulePrefs.KEY_API_KEY, ""))
                 putString(ModulePrefs.KEY_API_PROVIDER, prefs.getString(ModulePrefs.KEY_API_PROVIDER, null))
                 putString(ModulePrefs.KEY_API_MODEL, prefs.getString(ModulePrefs.KEY_API_MODEL, ""))
+                putBoolean(ModulePrefs.KEY_SKILL_ENABLED, skillEnabled)
+                putString(ModulePrefs.KEY_SKILL_PROMPT, skillPrompt)
             }
         }
 

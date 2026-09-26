@@ -59,6 +59,19 @@
             <TextView android:id="@+id/textDisplayHint" style="@style/Yanwai.Caption"
                 android:text="对应微信右上角的「绘制」开关；隐藏结果不会关闭分析总开关。" />
 
+            <TextView style="@style/Yanwai.Section" android:text="回复技能" />
+            <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switchSkillEnabled"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:minHeight="56dp" android:text="启用回复技能" android:textSize="16sp"
+                android:textColor="@color/text_primary" />
+            <TextView android:id="@+id/textSkillHint" style="@style/Yanwai.Caption"
+                android:text="开启后，输出回复建议时会参考已启用技能设定的风格或规则。技能只影响建议，不改变情绪判断，也不会自动发送消息。" />
+            <LinearLayout android:id="@+id/skillListContainer" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:layout_marginTop="8dp" />
+            <com.google.android.material.button.MaterialButton android:id="@+id/buttonAddSkill"
+                style="@style/Yanwai.Button.Outline" android:layout_marginTop="8dp" android:text="添加技能" />
+
             <TextView android:id="@+id/modelSection" style="@style/Yanwai.Section" android:text="模型连接" />
             <TextView android:id="@+id/textModelStatus" style="@style/Yanwai.Body" android:text="先选择渠道，再填写对应的 API Key。" />
             <TextView android:id="@+id/textDraftStatus" style="@style/Yanwai.Badge"
@@ -85,8 +98,8 @@
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/layoutApiModel"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="12dp" android:hint="模型名" android:visibility="gone"
-                app:helperText="按服务商文档填写，留空使用 jev-1.13.0。">
+                android:layout_marginTop="12dp" android:hint="模型名"
+                app:helperText="预设渠道已自动填入默认模型，可根据需要修改；自定义渠道按服务商文档填写。">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/inputApiModel"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:minHeight="56dp" android:inputType="textVisiblePassword" android:singleLine="true"

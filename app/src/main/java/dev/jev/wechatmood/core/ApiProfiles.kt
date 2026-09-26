@@ -10,8 +10,8 @@ object ApiProfiles {
         if (read("channel_${previous.id}_key") == null) {
             updates["channel_${previous.id}_key"] = read(ModulePrefs.KEY_API_KEY).orEmpty()
             updates["channel_${previous.id}_endpoint"] = if (previous == JevProvider.CUSTOM) previousEndpoint else previous.endpoint
-            updates["channel_${previous.id}_model"] = if (previous == JevProvider.CUSTOM)
-                read(ModulePrefs.KEY_API_MODEL).orEmpty().ifBlank { previous.model } else previous.model
+            // 所有渠道都可能有用户自定义模型名，迁移时保留已保存的值，留空用渠道默认。
+            updates["channel_${previous.id}_model"] = read(ModulePrefs.KEY_API_MODEL).orEmpty().ifBlank { previous.model }
         }
         updates.putAll(mapOf(
             ModulePrefs.KEY_API_PROVIDER to settings.provider.id,

@@ -41,6 +41,8 @@ object SettingsSync {
             bundle.getBoolean(ModulePrefs.KEY_ENABLED), bundle.getBoolean(ModulePrefs.KEY_SHOW_BADGE),
             bundle.getBoolean(ModulePrefs.KEY_EXPLORE), ApiSettings.fromInput(
                 bundle.getString(ModulePrefs.KEY_API_BASE).orEmpty(), bundle.getString(ModulePrefs.KEY_API_KEY).orEmpty(),
-                bundle.getString(ModulePrefs.KEY_API_PROVIDER), bundle.getString(ModulePrefs.KEY_API_MODEL).orEmpty()), generation)
+                bundle.getString(ModulePrefs.KEY_API_PROVIDER), bundle.getString(ModulePrefs.KEY_API_MODEL).orEmpty()), generation,
+            bundle.getBoolean(ModulePrefs.KEY_SKILL_ENABLED, false),
+            bundle.getString(ModulePrefs.KEY_SKILL_PROMPT).orEmpty())
     }.getOrNull()
 }

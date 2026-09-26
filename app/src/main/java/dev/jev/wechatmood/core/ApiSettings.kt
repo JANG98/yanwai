@@ -19,7 +19,8 @@ class ApiSettings private constructor(val endpoint: String, val apiKey: String,
             }
             val key = apiKey.trim()
             require(key.all { it.code in 33..126 }) { "API Key 不能包含空格、换行或中文字符" }
-            val selectedModel = if (provider == JevProvider.CUSTOM) model.trim().ifBlank { provider.model } else provider.model
+            // 所有渠道都允许自定义模型名：用户填写了就用用户的，留空用渠道预设默认。
+            val selectedModel = model.trim().ifBlank { provider.model }
             require(selectedModel.all { it.code in 33..126 }) { "模型名不能包含空格、换行或中文字符" }
             return ApiSettings(address, key, provider, selectedModel)
         }

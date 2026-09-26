@@ -2,7 +2,8 @@ package dev.jev.wechatmood.core
 
 // Memory only: credentials are not copied into WeChat's files or backups.
 class RuntimeSettings(val revision: Long, val enabled: Boolean, val showBadge: Boolean,
-    val exploreMode: Boolean, val api: ApiSettings, val generation: String) {
+    val exploreMode: Boolean, val api: ApiSettings, val generation: String,
+    val skillEnabled: Boolean, val skillPrompt: String) {
     val canAnalyze get() = enabled && api.isConfigured
 }
 

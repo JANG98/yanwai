@@ -5,7 +5,7 @@ import org.junit.Test
 
 class SettingsSessionTest {
     private fun settings(revision: Long, enabled: Boolean = true, key: String = "test-key", generation: String = "install-a") =
-        RuntimeSettings(revision, enabled, true, false, ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, key), generation)
+        RuntimeSettings(revision, enabled, true, false, ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, key), generation, false, "")
 
     @Test fun `first failed read never enables analysis`() {
         val session = SettingsSession()

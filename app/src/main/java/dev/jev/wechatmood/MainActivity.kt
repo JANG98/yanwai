@@ -10,6 +10,9 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Toast
 import android.widget.TextView
+import android.widget.EditText
+import android.widget.LinearLayout
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -24,6 +27,8 @@ import dev.jev.wechatmood.core.JevProvider
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.core.SettingsProvider
+import dev.jev.wechatmood.core.Skill
+import dev.jev.wechatmood.core.SkillStore
 import dev.jev.wechatmood.databinding.ActivityMainBinding
 import dev.jev.wechatmood.updates.UpdateNotice
 import dev.jev.wechatmood.ui.ProbeState
@@ -41,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private var selectedProvider = JevProvider.TYPESAFE
     private var bindingInputs = false
     private var probeState = ProbeState.UNTESTED
+    private var syncingSkills = false
     private val stateListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (!isFinishing && !isDestroyed) refresh() }
     }
@@ -109,6 +115,19 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "重新启动微信后生效", Toast.LENGTH_SHORT).show()
             }
         }
+        val skillPrefs = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+        binding.switchSkillEnabled.isChecked = SkillStore.isFeatureEnabled(skillPrefs)
+        binding.switchSkillEnabled.setOnCheckedChangeListener { _, value ->
+            if (!syncingSkills) {
+                SkillStore.setFeatureEnabled(getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE), value)
+                SettingsProvider.save(this) { } // 触发 revision 递增和广播
+                ModulePrefs.reload(force = true)
+                renderSkillList()
+                Toast.makeText(this, if (value) "回复技能已启用" else "回复技能已关闭", Toast.LENGTH_SHORT).show()
+            }
+        }
+        binding.buttonAddSkill.setOnClickListener { showSkillDialog(null) }
+        renderSkillList()
         binding.buttonDebug.setOnClickListener {
             val open = binding.debugPanel.visibility != View.VISIBLE
             binding.debugPanel.visibility = if (open) View.VISIBLE else View.GONE
@@ -167,15 +186,19 @@ class MainActivity : AppCompatActivity() {
         val custom = selectedProvider == JevProvider.CUSTOM
         binding.inputProvider.setText(selectedProvider.label, false)
         binding.inputApiBase.setText(if (custom) draft.endpoint else selectedProvider.endpoint)
-        binding.inputApiModel.setText(if (custom) draft.model else selectedProvider.model)
+        // 所有渠道都允许自定义模型名：预设渠道默认填入对应模型，用户可修改。
+        binding.inputApiModel.setText(if (draft.model.isNotBlank()) draft.model else selectedProvider.model)
         binding.inputApiKey.setText(draft.key)
         binding.layoutApiBase.isEnabled = custom
         binding.layoutApiBase.visibility = if (custom) View.VISIBLE else View.GONE
         binding.layoutApiBase.helperText = if (custom) "请填写完整 Jev 兼容接口地址，不会自动补路径。" else "已按渠道匹配，无需手动修改。"
-        binding.layoutApiModel.visibility = if (custom) View.VISIBLE else View.GONE
+        binding.layoutApiModel.visibility = View.VISIBLE
+        binding.layoutApiModel.helperText = if (custom)
+            "按服务商文档填写模型名，留空使用 jev-1.13.0。" else
+            "已填入 ${selectedProvider.label} 默认模型，可根据需要修改。"
         binding.textProviderGuide.text = selectedProvider.guide
         binding.textProviderSummary.text = if (custom) "填写支持 Jev 协议的完整地址、模型名和 Key。" else
-            "${selectedProvider.label} 的地址和模型已匹配，只需填写对应 Key。"
+            "${selectedProvider.label} 的地址和模型已匹配，只需填写对应 Key；模型名可按需修改。"
         binding.buttonGetKey.visibility = if (selectedProvider.keyUrl == null) View.GONE else View.VISIBLE
         binding.layoutApiBase.error = null
         binding.layoutApiKey.error = null
@@ -265,6 +288,10 @@ class MainActivity : AppCompatActivity() {
         binding.switchBadge.isChecked = prefs.getBoolean(ModulePrefs.KEY_SHOW_BADGE, true)
         binding.switchExplore.isChecked = prefs.getBoolean(ModulePrefs.KEY_EXPLORE, false)
         syncingSwitches = false
+        syncingSkills = true
+        binding.switchSkillEnabled.isChecked = SkillStore.isFeatureEnabled(prefs)
+        syncingSkills = false
+        renderSkillList()
         val savedProvider = JevProvider.resolve(prefs.getString(ModulePrefs.KEY_API_PROVIDER, null),
             prefs.getString(ModulePrefs.KEY_API_BASE, "").orEmpty())
         binding.textModelStatus.text = if (prefs.getString(ModulePrefs.KEY_API_KEY, "").isNullOrBlank())
@@ -408,6 +435,162 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "无法打开微信，请检查是否安装在同一空间", Toast.LENGTH_LONG).show()
         }
     }
+
+    private fun renderSkillList() {
+        val container = binding.skillListContainer
+        container.removeAllViews()
+        val prefs = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+        val skills = SkillStore.loadAll(prefs)
+        val featureOn = SkillStore.isFeatureEnabled(prefs)
+        if (skills.isEmpty()) {
+            val empty = TextView(this).apply {
+                text = "还没有技能。点击「添加技能」创建一个，例如「温柔风格」「幽默回复」等。"
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                textSize = 13f
+                setPadding(0, dp(8), 0, dp(4))
+            }
+            container.addView(empty)
+            return
+        }
+        skills.forEach { skill ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setBackgroundResource(R.drawable.status_pill)
+            }
+            val topRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val nameView = TextView(this).apply {
+                text = skill.name
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+                textSize = 15f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val toggle = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+                isChecked = skill.enabled
+                isEnabled = featureOn
+                setOnCheckedChangeListener { _, value ->
+                    val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                    SkillStore.toggle(p, skill.id, value)
+                    SettingsProvider.save(this@MainActivity) { }
+                    ModulePrefs.reload(force = true)
+                }
+            }
+            topRow.addView(nameView)
+            topRow.addView(toggle)
+            row.addView(topRow)
+            if (skill.description.isNotBlank()) {
+                row.addView(TextView(this).apply {
+                    text = skill.description
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 13f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            if (skill.prompt.isNotBlank()) {
+                row.addView(TextView(this).apply {
+                    text = "提示：${skill.prompt}"
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                    textSize = 12f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(6), 0, 0)
+            }
+            btnRow.addView(com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "编辑"
+                textSize = 12f
+                setOnClickListener { showSkillDialog(skill) }
+            })
+            btnRow.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
+            btnRow.addView(com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "删除"
+                textSize = 12f
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("删除技能")
+                        .setMessage("确定删除「${skill.name}」吗？此操作不可撤销。")
+                        .setPositiveButton("删除") { _, _ ->
+                            val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                            SkillStore.delete(p, skill.id)
+                            SettingsProvider.save(this@MainActivity) { }
+                            ModulePrefs.reload(force = true)
+                            renderSkillList()
+                            Toast.makeText(this@MainActivity, "已删除", Toast.LENGTH_SHORT).show()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            })
+            row.addView(btnRow)
+            container.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) })
+        }
+    }
+
+    private fun showSkillDialog(skill: Skill?) {
+        val isEdit = skill != null
+        val nameInput = EditText(this).apply {
+            hint = "技能名称，例如「温柔风格」"
+            setText(skill?.name ?: "")
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        val descInput = EditText(this).apply {
+            hint = "简短描述（可选）"
+            setText(skill?.description ?: "")
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        val promptInput = EditText(this).apply {
+            hint = "技能提示词，描述回复风格或规则，例如「回复语气温柔体贴，多用关心的话语」"
+            setText(skill?.prompt ?: "")
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            inputType = android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 3
+            maxLines = 6
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(8))
+            addView(nameInput)
+            addView(descInput)
+            addView(promptInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (isEdit) "编辑技能" else "添加技能")
+            .setView(layout)
+            .setPositiveButton("保存") { _, _ ->
+                val name = nameInput.text.toString().trim()
+                if (name.isBlank()) {
+                    Toast.makeText(this, "请填写技能名称", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val p = getSharedPreferences(ModulePrefs.FILE_NAME, MODE_PRIVATE)
+                if (isEdit && skill != null) {
+                    SkillStore.update(p, skill.copy(name = name,
+                        description = descInput.text.toString().trim(),
+                        prompt = promptInput.text.toString().trim()))
+                } else {
+                    SkillStore.add(p, Skill(id = Skill.newId(), name = name,
+                        description = descInput.text.toString().trim(),
+                        prompt = promptInput.text.toString().trim(), enabled = true))
+                }
+                SettingsProvider.save(this) { }
+                ModulePrefs.reload(force = true)
+                renderSkillList()
+                Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() { uiScope.cancel(); super.onDestroy() }
 }

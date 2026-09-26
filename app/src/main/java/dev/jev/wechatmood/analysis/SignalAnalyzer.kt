@@ -57,12 +57,13 @@ object SignalAnalyzer {
         val job = currentCoroutineContext()
         // Keep both rounds on the same endpoint and credential, even if settings change mid-request.
         val settings = ModulePrefs.apiSettings()
+        val skillPrompt = ModulePrefs.activeSkillPrompt
         check(settings.isConfigured) { "请先在言外设置中填写并保存 API Key" }
         try {
-            ChatAnalysis.analyze(input, settings.model, { client.exchange(it, settings) }) {
+            ChatAnalysis.analyze(input, settings.model, { client.exchange(it, settings) }, {
                 job.ensureActive()
                 shouldContinue()
-            }
+            }, skillPrompt)
         } catch (e: org.json.JSONException) {
             throw IllegalStateException("模型返回不完整，本次不显示判断")
         } catch (e: IllegalArgumentException) {

@@ -13,6 +13,8 @@ object ModulePrefs {
     const val KEY_API_BASE = "api_base"
     const val KEY_API_PROVIDER = "api_provider"
     const val KEY_API_MODEL = "api_model"
+    const val KEY_SKILL_ENABLED = "skill_feature_enabled"
+    const val KEY_SKILL_PROMPT = "skill_active_prompt"
     private var context: Context? = null
     private val session = SettingsSession()
     private var lastRead = -1000L
@@ -75,6 +77,8 @@ object ModulePrefs {
     val apiKey get() = session.current?.api?.apiKey.orEmpty()
     fun apiSettings(): ApiSettings = session.current?.api ?: ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, "")
     val canAnalyze get() = session.current?.canAnalyze == true
+    val skillEnabled get() = session.current?.skillEnabled == true
+    val activeSkillPrompt get() = session.current?.skillPrompt.orEmpty()
     @Synchronized fun setSwitch(key: String, value: Boolean): Boolean = runCatching {
         require(key == KEY_ENABLED || key == KEY_SHOW_BADGE)
         val result = context?.contentResolver?.call(SettingsProvider.URI, "set_switch", key,

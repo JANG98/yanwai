@@ -51,10 +51,13 @@ object JevProtocol {
             ChatFacts.questions.mapValues { (key, q) -> readChoice(answers, key, q.options) })
     }
 
-    fun detailPayload(input: AnalysisInput, model: String, profile: ChatProfile): JSONObject {
+    fun detailPayload(input: AnalysisInput, model: String, profile: ChatProfile, skillPrompt: String = ""): JSONObject {
         val candidates = ChatTemplates.candidates(profile)
         val actions = ChatActions.candidates(profile)
         require(candidates.isNotEmpty() || actions.isNotEmpty())
+        // 技能提示只附加在动作选择问题上，不影响情绪和事件解读。
+        val skillSuffix = if (skillPrompt.isNotBlank())
+            "\n\n【已启用的回复风格技能，选择动作时请参考】\n$skillPrompt\n以上技能仅作为回复风格参考，不能改变聊天事实，也不能跳过候选动作的适用前提检查。" else ""
         val questions = JSONObject()
         if (candidates.isNotEmpty()) questions.put("focus", choice(
             "哪张分析卡的问题最贴合当前消息、最值得提醒？已解释过不重复催解释，已接受不重复催道歉。没有贴合项选 none。",
@@ -63,7 +66,8 @@ object JevProtocol {
             "结合真实聊天原文，哪一个下一步动作最适合现在？逐项核对适用前提；第一轮判断可能有误。" +
                 "不要假设能看到同轮 focus 或 reading 的答案，独立选择动作。优先回应当前未回应的信息，" +
                 "不要重复已经给过的安慰、解释或问题。新话题优先接新话题，吐槽第三方不要求我方道歉。" +
-                "没有明确约定不能建议兑现，没求办法不急着指导。候选都不合适或前提不成立就选 none。",
+                "没有明确约定不能建议兑现，没求办法不急着指导。候选都不合适或前提不成立就选 none。" +
+                skillSuffix,
             ChatActions.options(profile)))
         for (card in candidates) {
             questions.put("reading_${card.id}", choice(
