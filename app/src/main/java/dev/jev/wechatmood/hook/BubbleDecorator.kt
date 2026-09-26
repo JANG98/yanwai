@@ -42,13 +42,17 @@ object BubbleDecorator {
             cards[row] = state
         }
         val mood = MoodStore.get(key)
-        val value = mood?.detail ?: SignalAnalyzer.failure(key)?.let {
+        var value = mood?.detail ?: SignalAnalyzer.failure(key)?.let {
             "${JevProtocol.header}\n分析失败：$it\n点击此卡重试"
         } ?: "${JevProtocol.header}\n" + if (ModulePrefs.canAnalyze) "正在分析…" else "模型未配置"
+        // 有回复建议时在 detail 文本中标注
+        val replies = mood?.replies ?: emptyList()
+        if (replies.isNotEmpty() && mood != null) {
+            value += "\n回复建议：${replies.size} 条（点击下方复制）"
+        }
         if (state.detailView.text.toString() != value) state.detailView.text = value
 
         // 更新回复建议显示
-        val replies = mood?.replies ?: emptyList()
         state.replyViews.forEachIndexed { index, textView ->
             if (index < replies.size) {
                 textView.text = "💬 ${replies[index]}"
