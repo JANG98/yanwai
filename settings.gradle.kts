@@ -1,23 +1,23 @@
 pluginManagement {
     repositories {
-        // 国内直连 dl.google.com 时并发建连容易被中断（TLS handshake terminated），
-        // 所以把阿里云镜像放前面兜底，官方源留在后面。
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
+        // CI/国外环境优先用官方仓库（稳定快速），国内开发时自动 fallback 到阿里云镜像。
+        // 注意：GitHub Actions 运行在国外，阿里云镜像可能 502，必须官方源在前。
         google()
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.aliyun.com/repository/gradle-plugin")
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/public")
     }
 }
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
         google()
         mavenCentral()
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/public")
         // Xposed API 与部分模块依赖走 JitPack
         maven("https://jitpack.io")
     }
