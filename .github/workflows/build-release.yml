@@ -163,7 +163,7 @@ jobs:
           fi
           echo "使用 apksigner: $APKSIGNER"
 
-          # 签名（v1+v2+v3 全方案，兼容 Android 7.0 以下和以上）
+          # 签名（v1+v2 全方案，兼容 Android 4.0+；v3用于密钥轮替，普通应用不需要且JKS格式下可能导致v1/v2验证失败）
           "$APKSIGNER" sign \
             --ks /tmp/signing-keystore.jks \
             --ks-pass pass:"$SIGNING_KEYSTORE_PASSWORD" \
@@ -171,7 +171,7 @@ jobs:
             --key-pass pass:"$SIGNING_KEY_PASSWORD" \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
-            --v3-signing-enabled true \
+            --v3-signing-enabled false \
             --out "$APK_SIGNED" \
             "$APK_UNSIGNED"
 
