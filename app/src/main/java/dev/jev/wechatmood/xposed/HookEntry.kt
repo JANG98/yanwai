@@ -15,7 +15,6 @@ import dev.jev.wechatmood.core.ModulePrefs
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.hook.MessageSniffer
-import dev.jev.wechatmood.hook.SettingsEntryInjector
 import dev.jev.wechatmood.hook.SettingsEntryHook
 
 /** Direct package entry, independent of the optional initZygote callback. */

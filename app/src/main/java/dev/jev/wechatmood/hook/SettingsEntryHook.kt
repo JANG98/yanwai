@@ -107,7 +107,7 @@ object SettingsEntryHook {
             })
             MoodLog.i("CommonSettingsUI 入口 Hook 已安装")
         }.onFailure {
-            MoodLog.d("CommonSettingsUI 类未找到（可选）")
+            MoodLog.i("CommonSettingsUI 类未找到（可选）")
         }
     }
 
@@ -129,7 +129,7 @@ object SettingsEntryHook {
             XposedHelpers.callMethod(prefScreen, "findPreference", PREF_KEY)
         }.getOrNull()
         if (existing != null) {
-            MoodLog.d("设置入口已存在，跳过")
+            MoodLog.i("设置入口已存在，跳过")
             return
         }
 
