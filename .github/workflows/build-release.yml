@@ -119,18 +119,17 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          # 调试：输出 Secret 长度（不输出值本身）
-          echo "SIGNING_KEYSTORE_BASE64 长度: ${#SIGNING_KEYSTORE_BASE64}"
-          echo "SIGNING_KEYSTORE_PASSWORD 长度: ${#SIGNING_KEYSTORE_PASSWORD}"
-          echo "SIGNING_KEY_ALIAS 长度: ${#SIGNING_KEY_ALIAS}"
-          echo "SIGNING_KEY_PASSWORD 长度: ${#SIGNING_KEY_PASSWORD}"
+          # 去除 Secret 中可能的换行符（gh secret set 从 stdin 读取时会保留末尾换行）
+          SIGNING_KEYSTORE_BASE64=$(echo "$SIGNING_KEYSTORE_BASE64" | tr -d '\n\r')
+          SIGNING_KEYSTORE_PASSWORD=$(echo "$SIGNING_KEYSTORE_PASSWORD" | tr -d '\n\r')
+          SIGNING_KEY_ALIAS=$(echo "$SIGNING_KEY_ALIAS" | tr -d '\n\r')
+          SIGNING_KEY_PASSWORD=$(echo "$SIGNING_KEY_PASSWORD" | tr -d '\n\r')
+          echo "签名配置: keystore长度=${#SIGNING_KEYSTORE_BASE64} alias=$SIGNING_KEY_ALIAS"
 
           # 检查签名密钥是否配置
           if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
             echo "::error::未配置 SIGNING_KEYSTORE_BASE64 Secret，无法签名！"
             echo "请在仓库 Settings → Secrets and variables → Actions 中配置签名相关 Secrets。"
-            echo "当前可用的环境变量（不含值）:"
-            env | grep -i SIGNING | sed 's/=.*/=***/' || true
             exit 1
           fi
 
@@ -266,6 +265,14 @@ jobs:
           BUILD_STATUS: ${{ job.status }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # 去除 Secret 中可能的换行符（gh secret set 从 stdin 读取时会保留末尾换行）
+          SMTP_HOST=$(echo "$SMTP_HOST" | tr -d '\n\r')
+          SMTP_PORT=$(echo "$SMTP_PORT" | tr -d '\n\r')
+          SMTP_USERNAME=$(echo "$SMTP_USERNAME" | tr -d '\n\r')
+          SMTP_PASSWORD=$(echo "$SMTP_PASSWORD" | tr -d '\n\r')
+          MAIL_TO=$(echo "$MAIL_TO" | tr -d '\n\r')
+          echo "SMTP 配置: host=$SMTP_HOST port=$SMTP_PORT from=$SMTP_USERNAME to=$MAIL_TO"
+
           # 检查邮件配置
           if [ -z "$SMTP_HOST" ] || [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ] || [ -z "$MAIL_TO" ]; then
             echo "::warning::未配置邮件相关 Secrets，跳过邮件发送。"
@@ -310,30 +317,31 @@ jobs:
           } > /tmp/email.txt
 
           # 根据端口选择发送方式
+          CURL_EXIT=0
           if [ "$SMTP_PORT" = "465" ]; then
             # SSL 方式
             echo "使用 SSL 方式发送邮件 (端口 465)..."
-            curl -s --url "smtps://$SMTP_HOST:$SMTP_PORT" \
+            curl -v --url "smtps://$SMTP_HOST:$SMTP_PORT" \
               --ssl-reqd \
               --mail-from "$SMTP_USERNAME" \
               --mail-rcpt "$MAIL_TO" \
               --user "$SMTP_USERNAME:$SMTP_PASSWORD" \
-              --upload-file /tmp/email.txt
+              --upload-file /tmp/email.txt || CURL_EXIT=$?
           else
             # STARTTLS 方式（默认 587）
             echo "使用 STARTTLS 方式发送邮件 (端口 $SMTP_PORT)..."
-            curl -s --url "smtp://$SMTP_HOST:$SMTP_PORT" \
+            curl -v --url "smtp://$SMTP_HOST:$SMTP_PORT" \
               --ssl-reqd \
               --mail-from "$SMTP_USERNAME" \
               --mail-rcpt "$MAIL_TO" \
               --user "$SMTP_USERNAME:$SMTP_PASSWORD" \
-              --upload-file /tmp/email.txt
+              --upload-file /tmp/email.txt || CURL_EXIT=$?
           fi
 
-          if [ $? -eq 0 ]; then
+          if [ $CURL_EXIT -eq 0 ]; then
             echo "邮件发送成功至: $MAIL_TO"
           else
-            echo "::warning::邮件发送失败，请检查 SMTP 配置。"
+            echo "::warning::邮件发送失败，curl 退出码: $CURL_EXIT，请检查 SMTP 配置。"
           fi
 
           # 清理临时文件
