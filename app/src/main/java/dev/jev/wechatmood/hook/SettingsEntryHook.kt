@@ -180,6 +180,7 @@ object SettingsEntryHook {
 
     /**
      * 底部条 fallback：在设置页面底部添加一个可点击的入口条。
+     * 明确设置背景色和文字颜色，确保在深色/浅色主题下都可见。
      */
     private fun injectBottomBar(activity: Activity) {
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
@@ -190,14 +191,22 @@ object SettingsEntryHook {
             tag = "yanwai_settings_entry"
             text = "$ENTRY_TITLE  ›\n言外 · 微信聊天情绪分析"
             textSize = 14f
-            setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
+            setTextColor(android.graphics.Color.BLACK)
+            setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 14))
             setOnClickListener { openSettings(activity) }
-            setBackgroundResource(android.R.color.white)
+            setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
+            // 添加上边框，和设置页面其他项区分
+            setBackgroundDrawable(android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.parseColor("#F5F5F5"))
+                setStroke(1, android.graphics.Color.parseColor("#E0E0E0"))
+            })
+            gravity = android.view.Gravity.CENTER_VERTICAL
         }
 
         // 包装在 LinearLayout 中，添加到底部
         val wrapper = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             addView(entryBar, LinearLayout.LayoutParams(-1, -2))
         }
 

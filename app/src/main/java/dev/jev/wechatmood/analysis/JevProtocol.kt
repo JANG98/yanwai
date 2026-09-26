@@ -64,8 +64,12 @@ object JevProtocol {
         val actions = ChatActions.candidates(profile)
         require(candidates.isNotEmpty() || actions.isNotEmpty())
         // 技能提示只附加在动作选择问题上，不影响情绪和事件解读。
+        // 重要：必须强调 skill 只是风格参考，输出必须严格是 JSON 格式，不能输出自由文本分析。
         val skillSuffix = if (skillPrompt.isNotBlank())
-            "\n\n【已启用的回复风格技能，选择动作时请参考】\n$skillPrompt\n以上技能仅作为回复风格参考，不能改变聊天事实，也不能跳过候选动作的适用前提检查。" else ""
+            "\n\n【回复风格参考】\n$skillPrompt\n" +
+            "【格式强制约束】以上仅为回复风格和角度的参考。你必须严格输出 JSON 格式的 choice 结果，" +
+            "绝对不能输出自由文本、分析过程、多版本建议或任何非 JSON 内容。" +
+            "风格参考只影响你对候选动作的偏好排序，不改变输出格式。" else ""
         val questions = JSONObject()
         if (candidates.isNotEmpty()) questions.put("focus", choice(
             "哪张分析卡的问题最贴合当前消息、最值得提醒？已解释过不重复催解释，已接受不重复催道歉。没有贴合项选 none。",

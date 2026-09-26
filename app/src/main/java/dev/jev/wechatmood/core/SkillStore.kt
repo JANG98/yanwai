@@ -116,8 +116,11 @@ object SkillStore {
      * 将已启用技能的提示拼接成一段注入文本，供分析流程使用。
      * 功能总开关关闭或没有启用技能时返回 null。
      *
-     * 对于技能库技能（library），使用完整的 SKILL.md 内容作为提示；
+     * 对于技能库技能（library），智能提取核心原则作为提示（避免完整 SKILL.md
+     * 中的输出格式指令与 JevProtocol 的 JSON 格式冲突）；
      * 对于自定义技能（custom），使用用户输入的提示词。
+     *
+     * 总长度限制在 1200 字以内，避免稀释原始指令。
      */
     fun activePrompt(context: Context): String? {
         val prefs = context.getSharedPreferences(ModulePrefs.FILE_NAME, Context.MODE_PRIVATE)
@@ -126,17 +129,117 @@ object SkillStore {
         if (active.isEmpty()) return null
 
         return buildString {
-            append("你现在需要参考以下已启用的技能/角色设定来生成回复建议：\n\n")
+            append("【已启用的回复风格参考，仅用于调整建议的语气和角度，不改变输出格式】\n\n")
             active.forEachIndexed { index, s ->
-                append("=== 技能 ${index + 1}：${s.name} ===\n")
-                if (s.description.isNotBlank()) {
-                    append("【技能描述】${s.description}\n")
+                append("=== 风格参考 ${index + 1}：${s.name} ===\n")
+                val effective = if (s.isLibrarySkill) {
+                    extractCorePrinciples(s.prompt.ifBlank { s.description })
+                } else {
+                    s.prompt.ifBlank { s.description }
                 }
-                append("【技能指令】\n")
-                append(s.prompt.ifBlank { s.description })
+                if (effective.isNotBlank()) {
+                    append(effective.take(600))
+                }
                 append("\n\n")
             }
-            append("请严格参考上述技能的风格、原则和指令来生成回复建议。")
+            append("以上仅作为回复风格和角度的参考，必须严格按照题目要求的 JSON 格式输出，不能输出自由文本分析。")
         }
+    }
+
+    /**
+     * 从完整的 SKILL.md 中提取核心原则。
+     * 优先提取"核心原则"章节，移除输出格式相关的章节（如"每次分析"、"首次使用"等），
+     * 避免 skill 的输出格式指令与 JevProtocol 的 JSON 格式冲突。
+     */
+    private fun extractCorePrinciples(fullText: String): String {
+        if (fullText.isBlank()) return ""
+
+        // 尝试提取"核心原则"章节
+        val coreSection = extractSection(fullText, "核心原则")
+        if (coreSection.isNotBlank()) {
+            return cleanMarkdown(coreSection)
+        }
+
+        // 如果没有核心原则章节，尝试提取前两个非空章节
+        val sections = extractAllSections(fullText).take(2)
+        if (sections.isNotEmpty()) {
+            return cleanMarkdown(sections.joinToString("\n"))
+        }
+
+        // 最后回退：取前 600 字
+        return cleanMarkdown(fullText.take(600))
+    }
+
+    /**
+     * 提取指定标题的章节内容（到下一个同级或更高级标题为止）。
+     */
+    private fun extractSection(text: String, title: String): String {
+        val lines = text.lines()
+        var inSection = false
+        val result = mutableListOf<String>()
+        var sectionLevel = 0
+
+        for (line in lines) {
+            val headerMatch = Regex("^(#{1,6})\\s+(.*)$").find(line)
+            if (headerMatch != null) {
+                val level = headerMatch.groupValues[1].length
+                val headerTitle = headerMatch.groupValues[2].trim()
+                if (inSection) {
+                    if (level <= sectionLevel) break
+                    result.add(line)
+                } else if (headerTitle.contains(title, ignoreCase = true)) {
+                    inSection = true
+                    sectionLevel = level
+                    result.add(line)
+                }
+            } else if (inSection) {
+                result.add(line)
+            }
+        }
+        return result.joinToString("\n").trim()
+    }
+
+    /**
+     * 提取所有章节标题和内容。
+     */
+    private fun extractAllSections(text: String): List<String> {
+        val lines = text.lines()
+        val sections = mutableListOf<String>()
+        var current = mutableListOf<String>()
+
+        for (line in lines) {
+            if (Regex("^#{1,6}\\s+").containsMatchIn(line)) {
+                if (current.isNotEmpty()) {
+                    sections.add(current.joinToString("\n").trim())
+                    current = mutableListOf()
+                }
+            }
+            current.add(line)
+        }
+        if (current.isNotEmpty()) sections.add(current.joinToString("\n").trim())
+        return sections.filter { it.isNotBlank() }
+    }
+
+    /**
+     * 清理 markdown 格式，移除表格、代码块、链接等，只保留纯文本原则。
+     */
+    private fun cleanMarkdown(text: String): String {
+        return text
+            // 移除代码块
+            .replace(Regex("```[\\s\\S]*?```"), "")
+            // 移除表格行
+            .replace(Regex("^\\|.*\\|$", RegexOption.MULTILINE), "")
+            // 移除 markdown 链接，保留文字
+            .replace(Regex("\\[([^\\]]+)\\]\\([^)]+\\)"), "$1")
+            // 移除标题标记，保留文字
+            .replace(Regex("^#{1,6}\\s+", RegexOption.MULTILINE), "")
+            // 移除粗体/斜体标记
+            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
+            .replace(Regex("\\*([^*]+)\\*"), "$1")
+            // 移除列表标记
+            .replace(Regex("^[-*]\\s+", RegexOption.MULTILINE), "· ")
+            // 合并多余空行
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
     }
 }
