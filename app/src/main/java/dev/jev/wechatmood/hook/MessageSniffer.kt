@@ -195,11 +195,18 @@ object MessageSniffer {
         visibleKeys = messages.map { it.key }.toSet()
         // 当前聊天的 talker（取第一条消息的 talker，同一聊天的消息 talker 相同）
         val currentTalker = messages.firstOrNull()?.talker.orEmpty()
+        // 当前聊天的关系描述（用户设置的，如"暧昧对象""女朋友"）
+        val relationship = if (currentTalker.isNotBlank())
+            ChatProfileStore.getRelationship(activity, currentTalker) else ""
+        // 为每条消息注入关系描述
+        val messagesWithProfile = if (relationship.isNotBlank()) {
+            messages.map { it.copy(relationship = relationship) }
+        } else messages
         // 当前聊天是否开启了分析（会话级开关，默认关闭）
         val chatEnabled = currentTalker.isNotBlank() && ChatSwitchStore.isEnabled(activity, currentTalker)
 
         if (ModulePrefs.canAnalyze && chatEnabled) {
-            for (message in messages) {
+            for (message in messagesWithProfile) {
                 val key = message.key
                 SignalAnalyzer.submit(message) { key in visibleKeys }
             }
@@ -225,10 +232,11 @@ object MessageSniffer {
             else -> {
                 val done = messages.count { dev.jev.wechatmood.core.MoodStore.get(it.key) != null }
                 val failed = messages.count { SignalAnalyzer.failure(it.key) != null }
+                val relationHint = if (relationship.isNotBlank()) " · 关系：$relationship" else ""
                 when {
-                    failed > 0 -> "本屏 ${messages.size} 条 · $failed 条失败，点击查看"
-                    done == messages.size -> "本屏 $done 条已分析 · 点击查看"
-                    else -> "正在分析本屏文字 $done/${messages.size} · 点击查看"
+                    failed > 0 -> "本屏 ${messages.size} 条 · $failed 条失败$relationHint，点击查看"
+                    done == messages.size -> "本屏 $done 条已分析$relationHint · 点击查看"
+                    else -> "正在分析本屏文字 $done/${messages.size}$relationHint · 点击查看"
                 }
             }
         }

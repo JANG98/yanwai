@@ -114,9 +114,17 @@ class HostUi(private val activity: Activity) {
 
     private fun showActions() {
         if (dialog?.isShowing == true) return
+        val hasTalker = currentTalker.isNotBlank()
+        val relation = if (hasTalker) ChatProfileStore.getRelationship(activity, currentTalker) else ""
+        val items = if (hasTalker) {
+            arrayOf("分析本屏", "设置关系描述", "助手设置", "导出运行日志")
+        } else {
+            arrayOf("分析本屏", "助手设置", "导出运行日志")
+        }
         dialog = AlertDialog.Builder(activity).setTitle("言外 · $status")
-            .setItems(arrayOf("分析本屏", "助手设置", "导出运行日志")) { _, which ->
-                when (which) {
+            .setItems(items) { _, which ->
+                val offset = if (hasTalker) 0 else 1
+                when (which + offset) {
                     0 -> {
                         // 分析本屏：开启当前聊天的会话级开关 + 全局绘制开关
                         if (currentTalker.isNotBlank()) {
@@ -128,11 +136,49 @@ class HostUi(private val activity: Activity) {
                             MessageSniffer.refresh()
                         } else Diagnostics.showFailure(activity, "分析开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
                     }
-                    1 -> openSettings()
-                    2 -> Diagnostics.show(activity)
+                    1 -> if (hasTalker) showRelationshipDialog(relation)
+                    2 -> openSettings()
+                    3 -> Diagnostics.show(activity)
                 }
             }
             .setNegativeButton("关闭", null).create().also { it.show() }
+    }
+
+    /**
+     * 弹出关系描述输入框，让用户设置当前聊天对象的关系描述。
+     */
+    private fun showRelationshipDialog(current: String) {
+        val input = android.widget.EditText(activity).apply {
+            hint = "例如：暧昧对象、刚认识的朋友、女朋友、同事、客户..."
+            setText(current)
+            setSelection(text.length)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        val hint = TextView(activity).apply {
+            text = "设置后，该聊天的情绪分析和回复建议会优先参考这段关系描述。"
+            setTextColor(androidx.core.content.ContextCompat.getColor(activity, dev.jev.wechatmood.R.color.text_secondary))
+            textSize = 12f
+            setPadding(dp(16), dp(4), dp(16), dp(8))
+        }
+        val layout = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(8))
+            addView(input)
+            addView(hint)
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("设置关系描述")
+            .setView(layout)
+            .setPositiveButton("保存") { _, _ ->
+                val value = input.text.toString().trim()
+                ChatProfileStore.setRelationship(activity, currentTalker, value)
+                MessageSniffer.refresh()
+                android.widget.Toast.makeText(activity,
+                    if (value.isNotBlank()) "关系描述已保存：$value" else "关系描述已清除",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     fun showSettings() {

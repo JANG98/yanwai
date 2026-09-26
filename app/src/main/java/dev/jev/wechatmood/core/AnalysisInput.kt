@@ -8,6 +8,8 @@ data class AnalysisInput(
     val context: List<ContextMessage> = emptyList(),
     val messageId: Long = 0,
     val speaker: String = "对方",
+    /** 聊天对象的关系描述（如"暧昧对象""女朋友"），作为分析和建议的首要参考 */
+    val relationship: String = "",
 ) {
     val key: String get() = MoodStore.keyOf(text, talker, context, messageId, speaker)
 }

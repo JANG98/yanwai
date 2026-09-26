@@ -11,7 +11,7 @@ object ChatAnalysis {
         shouldContinue: () -> Boolean = { true }, skillPrompt: String = ""): Mood {
         fun checkActive() { if (!shouldContinue()) throw CancellationException("分析已停止或消息不再可见") }
         checkActive()
-        val profile = JevProtocol.parseProfile(exchange(JevProtocol.payload(input.text, model, input.context, input.speaker)))
+        val profile = JevProtocol.parseProfile(exchange(JevProtocol.payload(input.text, model, input.context, input.speaker, input.relationship)))
         checkActive()
         if (ChatTemplates.candidates(profile).isEmpty() && ChatActions.candidates(profile).isEmpty()) {
             return JevProtocol.fallback(profile)

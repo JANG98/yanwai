@@ -15,6 +15,8 @@ import dev.jev.wechatmood.core.ModulePrefs
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.hook.MessageSniffer
+import dev.jev.wechatmood.hook.SettingsEntryInjector
+import dev.jev.wechatmood.hook.SettingsEntryHook
 
 /** Direct package entry, independent of the optional initZygote callback. */
 class HookEntry : IXposedHookLoadPackage {
@@ -63,6 +65,7 @@ class HookEntry : IXposedHookLoadPackage {
             ModulePrefs.init(context)
             MoodLog.i("微信主进程已加载模块 ${BuildConfig.VERSION_NAME}")
             ModulePrefs.report("模块 ${BuildConfig.VERSION_NAME} 已加载，等待打开聊天")
+            SettingsEntryHook.install(context.classLoader)
             MessageSniffer.install(context)
             installed = true
         }.onFailure {
