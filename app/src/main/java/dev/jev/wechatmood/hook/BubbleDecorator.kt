@@ -1,5 +1,8 @@
 package dev.jev.wechatmood.hook
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
 import android.view.View
@@ -7,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
+import android.widget.Toast
 import dev.jev.wechatmood.analysis.SignalAnalyzer
 import dev.jev.wechatmood.analysis.JevProtocol
 import dev.jev.wechatmood.core.ModulePrefs
@@ -18,7 +22,8 @@ import java.util.IdentityHashMap
 /** Append a sibling below the real text bubble, without replacing a host row or ViewHolder. */
 object BubbleDecorator {
     private data class Card(
-        val key: String, val view: TextView, val parent: ViewGroup,
+        val key: String, val container: LinearLayout, val detailView: TextView,
+        val replyViews: List<TextView>, val parent: ViewGroup,
         val anchor: View, val assignedId: Int?, val detach: View.OnAttachStateChangeListener,
     )
     private val cards = IdentityHashMap<View, Card>()
@@ -28,7 +33,7 @@ object BubbleDecorator {
         if (message == null || !ModulePrefs.enabled || !ModulePrefs.showBadge) { clear(row); return false }
         val key = message.key
         var state = cards[row]
-        if (state != null && (state.key != key || state.view.parent !== state.parent)) {
+        if (state != null && (state.key != key || state.container.parent !== state.parent)) {
             clear(row)
             state = null
         }
@@ -36,11 +41,41 @@ object BubbleDecorator {
             state = attach(row, key) ?: return false
             cards[row] = state
         }
-        val value = MoodStore.get(key)?.detail ?: SignalAnalyzer.failure(key)?.let {
+        val mood = MoodStore.get(key)
+        val value = mood?.detail ?: SignalAnalyzer.failure(key)?.let {
             "${JevProtocol.header}\n分析失败：$it\n点击此卡重试"
         } ?: "${JevProtocol.header}\n" + if (ModulePrefs.canAnalyze) "正在分析…" else "模型未配置"
-        if (state.view.text.toString() != value) state.view.text = value
+        if (state.detailView.text.toString() != value) state.detailView.text = value
+
+        // 更新回复建议显示
+        val replies = mood?.replies ?: emptyList()
+        state.replyViews.forEachIndexed { index, textView ->
+            if (index < replies.size) {
+                textView.text = "💬 ${replies[index]}"
+                textView.visibility = View.VISIBLE
+                textView.setOnClickListener {
+                    copyToClipboard(textView.context, replies[index])
+                    Toast.makeText(textView.context, "已复制回复建议 ${index + 1}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                textView.visibility = View.GONE
+                textView.setOnClickListener(null)
+            }
+        }
+
+        // 失败时点击重试
+        state.container.setOnClickListener {
+            if (SignalAnalyzer.failure(key) != null) {
+                SignalAnalyzer.retryFailure(key)
+                MessageSniffer.refresh()
+            }
+        }
         return true
+    }
+
+    private fun copyToClipboard(context: Context, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("回复建议", text))
     }
 
     private fun attach(row: View, key: String): Card? {
@@ -52,23 +87,56 @@ object BubbleDecorator {
         val width = minOf(dp(row, 300), root.width - left - dp(row, 16))
         if (width < dp(row, 100)) return null
         val dark = row.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-        val card = TextView(row.context).apply {
+        val textColor = if (dark) 0xFFE2E2E7.toInt() else 0xFF34343A.toInt()
+        val bgColor = if (dark) 0xFF26262B.toInt() else 0xFFDDDEE2.toInt()
+        val replyBgColor = if (dark) 0xFF3A3A40.toInt() else 0xFFE8E9ED.toInt()
+
+        // 情绪分析文本
+        val detailView = TextView(row.context).apply {
             id = View.generateViewId()
             textSize = 12f
-            setPadding(dp(row, 8), dp(row, 6), dp(row, 8), dp(row, 6))
-            setTextColor(if (dark) 0xFFE2E2E7.toInt() else 0xFF34343A.toInt())
-            background = GradientDrawable().apply {
-                cornerRadius = dp(row, 4).toFloat()
-                setColor(if (dark) 0xFF26262B.toInt() else 0xFFDDDEE2.toInt())
-            }
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            setOnClickListener {
-                if (SignalAnalyzer.failure(key) != null) {
-                    SignalAnalyzer.retryFailure(key)
-                    MessageSniffer.refresh()
+            setTextColor(textColor)
+            setPadding(dp(row, 8), dp(row, 6), dp(row, 8), dp(row, 4))
+        }
+
+        // 3 条回复建议
+        val replyViews = (0 until 3).map { index ->
+            TextView(row.context).apply {
+                id = View.generateViewId()
+                textSize = 13f
+                setTextColor(textColor)
+                setPadding(dp(row, 10), dp(row, 8), dp(row, 10), dp(row, 8))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(row, 6).toFloat()
+                    setColor(replyBgColor)
+                }
+                visibility = View.GONE
+                setOnClickListener {
+                    // 点击事件在 show() 中动态设置
                 }
             }
         }
+
+        // 容器
+        val container = LinearLayout(row.context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(row, 8), dp(row, 6), dp(row, 8), dp(row, 6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(row, 4).toFloat()
+                setColor(bgColor)
+            }
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            addView(detailView)
+            replyViews.forEach { reply ->
+                addView(reply, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(row, 4)
+                })
+            }
+        }
+
         var branch: View = anchor
         var parent = branch.parent as? ViewGroup
         var target: ViewGroup? = null
@@ -83,7 +151,7 @@ object BubbleDecorator {
                     bottomMargin = dp(row, 6)
                 }
                 // Append only: do not shift the indexes of the host's original children.
-                parent.addView(card, lp)
+                parent.addView(container, lp)
                 target = parent
                 break
             }
@@ -106,7 +174,7 @@ object BubbleDecorator {
                 topMargin = dp(row, 3)
                 bottomMargin = dp(row, 6)
             }
-            root.addView(card, lp)
+            root.addView(container, lp)
             target = root
         }
         if (target == null) {
@@ -119,7 +187,7 @@ object BubbleDecorator {
             override fun onViewDetachedFromWindow(v: View) { clear(v) }
         }
         row.addOnAttachStateChangeListener(detach)
-        return Card(key, card, target, branch, assignedId, detach)
+        return Card(key, container, detailView, replyViews, target, branch, assignedId, detach)
     }
 
     private fun findBubble(root: ViewGroup): View? {
@@ -152,7 +220,7 @@ object BubbleDecorator {
     fun clear(row: View) {
         val state = cards.remove(row) ?: return
         row.removeOnAttachStateChangeListener(state.detach)
-        (state.view.parent as? ViewGroup)?.removeView(state.view)
+        (state.container.parent as? ViewGroup)?.removeView(state.container)
         if (state.assignedId != null && state.anchor.id == state.assignedId) state.anchor.id = View.NO_ID
     }
     fun clearAll() { cards.keys.toList().forEach(::clear) }

@@ -66,6 +66,7 @@ class SettingsProvider : ContentProvider() {
                         putInt("risk", mood.risk)
                         putString("raw", mood.raw)
                         putString("detail", mood.detail)
+                        putString("replies", JSONArray(mood.replies).toString())
                     }
                 }
             }

@@ -38,8 +38,9 @@ object ChatAnalysisStore {
         val moodDetail: String,    // 分析结果：详细内容
         val moodRaw: String,       // 分析结果：原始 JSON
         val relationship: String,  // 当时的关系描述（可选）
+        val moodReplies: List<String> = emptyList(),  // 3 条回复建议
     ) {
-        fun toMood(): Mood = Mood(moodLabel, moodScore, moodRisk, moodRaw, moodDetail)
+        fun toMood(): Mood = Mood(moodLabel, moodScore, moodRisk, moodRaw, moodDetail, moodReplies)
 
         fun toJson(): JSONObject = JSONObject()
             .put("key", key)
@@ -53,6 +54,7 @@ object ChatAnalysisStore {
             .put("moodDetail", moodDetail)
             .put("moodRaw", moodRaw)
             .put("relationship", relationship)
+            .put("moodReplies", JSONArray(moodReplies))
 
         companion object {
             fun fromJson(obj: JSONObject): StoredAnalysis = StoredAnalysis(
@@ -67,6 +69,9 @@ object ChatAnalysisStore {
                 moodDetail = obj.optString("moodDetail", ""),
                 moodRaw = obj.optString("moodRaw", ""),
                 relationship = obj.optString("relationship", ""),
+                moodReplies = obj.optJSONArray("moodReplies")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList(),
             )
         }
     }
@@ -103,6 +108,7 @@ object ChatAnalysisStore {
             moodDetail = mood.detail,
             moodRaw = mood.raw,
             relationship = input.relationship,
+            moodReplies = mood.replies,
         )
 
         // 更新内存缓存（无论哪个进程都先更新内存）
@@ -155,19 +161,26 @@ object ChatAnalysisStore {
             runCatching {
                 val result = context.contentResolver.call(SettingsProvider.URI, "analysis_find", key, null)
                 if (result?.containsKey("label") == true) {
+                    val replies = result.getString("replies")?.let { jsonStr ->
+                        runCatching {
+                            val arr = JSONArray(jsonStr)
+                            (0 until arr.length()).map { arr.getString(it) }
+                        }.getOrDefault(emptyList())
+                    } ?: emptyList()
                     val mood = Mood(
                         label = result.getString("label") ?: "",
                         score = result.getDouble("score"),
                         risk = result.getInt("risk"),
                         raw = result.getString("raw") ?: "",
                         detail = result.getString("detail") ?: "",
+                        replies = replies,
                     )
                     // 缓存到内存
                     keyIndex[key] = StoredAnalysis(
                         key = key, talker = "", text = "", speaker = "",
                         timestamp = 0, moodLabel = mood.label, moodScore = mood.score,
                         moodRisk = mood.risk, moodDetail = mood.detail, moodRaw = mood.raw,
-                        relationship = "",
+                        relationship = "", moodReplies = replies,
                     )
                     return mood
                 }

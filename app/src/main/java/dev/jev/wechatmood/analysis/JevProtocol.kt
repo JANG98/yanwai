@@ -52,6 +52,15 @@ object JevProtocol {
     internal fun choice(instructions: String, options: Map<String, String>) = JSONObject()
         .put("type", "choice").put("instructions", SCOPE + instructions).put("criteria", JSONObject(options))
 
+    /**
+     * 生成多条回复建议的问题类型。
+     * 要求模型根据消息原文、关系描述、情绪分析和技能风格，生成 count 条可直接发送的回复。
+     */
+    internal fun replies(instructions: String, count: Int = 3) = JSONObject()
+        .put("type", "replies")
+        .put("instructions", SCOPE + instructions)
+        .put("count", count)
+
     fun parseProfile(body: String): ChatProfile {
         val answers = JSONObject(body).getJSONObject("answers")
         return ChatProfile(readChoice(answers, "scene", ChatTemplates.scenes),
@@ -61,26 +70,26 @@ object JevProtocol {
 
     fun detailPayload(input: AnalysisInput, model: String, profile: ChatProfile, skillPrompt: String = ""): JSONObject {
         val candidates = ChatTemplates.candidates(profile)
-        val actions = ChatActions.candidates(profile)
-        require(candidates.isNotEmpty() || actions.isNotEmpty())
-        // 技能提示只附加在动作选择问题上，不影响情绪和事件解读。
-        // 重要：必须强调 skill 只是风格参考，输出必须严格是 JSON 格式，不能输出自由文本分析。
+        // 技能提示用于调整回复建议的风格和角度
         val skillSuffix = if (skillPrompt.isNotBlank())
             "\n\n【回复风格参考】\n$skillPrompt\n" +
-            "【格式强制约束】以上仅为回复风格和角度的参考。你必须严格输出 JSON 格式的 choice 结果，" +
-            "绝对不能输出自由文本、分析过程、多版本建议或任何非 JSON 内容。" +
-            "风格参考只影响你对候选动作的偏好排序，不改变输出格式。" else ""
+            "【格式强制约束】以上仅为回复风格和角度的参考。你必须严格输出 JSON 格式，" +
+            "绝对不能输出自由文本、分析过程或任何非 JSON 内容。" +
+            "风格参考只影响回复建议的措辞和角度，不改变输出格式。" else ""
         val questions = JSONObject()
         if (candidates.isNotEmpty()) questions.put("focus", choice(
             "哪张分析卡的问题最贴合当前消息、最值得提醒？已解释过不重复催解释，已接受不重复催道歉。没有贴合项选 none。",
             focusOptions(candidates)))
-        if (actions.isNotEmpty()) questions.put("action", choice(
-            "结合真实聊天原文，哪一个下一步动作最适合现在？逐项核对适用前提；第一轮判断可能有误。" +
-                "不要假设能看到同轮 focus 或 reading 的答案，独立选择动作。优先回应当前未回应的信息，" +
-                "不要重复已经给过的安慰、解释或问题。新话题优先接新话题，吐槽第三方不要求我方道歉。" +
-                "没有明确约定不能建议兑现，没求办法不急着指导。候选都不合适或前提不成立就选 none。" +
+        // 生成 3 条回复建议
+        questions.put("replies", replies(
+            "根据对方当前消息原文、上下文、关系描述和第一轮情绪分析，生成 3 条可以直接复制发送的回复建议。" +
+                "要求：1) 每条都是完整的一句话，可直接发送，不要加序号、引号或解释；" +
+                "2) 3 条风格要有差异：一条稳妥自然、一条略带轻松/调侃、一条稍主动/推进关系；" +
+                "3) 必须结合对方原话回应，不要说空话套话；" +
+                "4) 考虑关系描述设定的亲密度和边界；" +
+                "5) 不要道歉、不要过度解释、不要问太多问题，每条只承载一个核心意思。" +
                 skillSuffix,
-            ChatActions.options(profile)))
+            count = 3))
         for (card in candidates) {
             questions.put("reading_${card.id}", choice(
                 "只在此问题适合当前语境时判断，否则选 unclear。${card.question}" +
@@ -101,16 +110,14 @@ object JevProtocol {
 
     fun parseDetail(body: String, profile: ChatProfile): Mood {
         val candidates = ChatTemplates.candidates(profile)
-        val actions = ChatActions.candidates(profile)
-        require(candidates.isNotEmpty() || actions.isNotEmpty())
         val answers = JSONObject(body).getJSONObject("answers")
         val focus = if (candidates.isNotEmpty()) readChoice(answers, "focus", focusOptions(candidates)) else null
-        val action = if (actions.isNotEmpty()) readChoice(answers, "action", ChatActions.options(profile)) else null
+        // 解析 3 条回复建议
+        val replies = readReplies(answers, "replies")
         // Validate every requested answer, even when the focus is none. Partial replies must be retryable failures.
         val readings = candidates.associate { it.id to readChoice(answers, "reading_${it.id}", it.options) }
         val card = candidates.firstOrNull { it.id == focus?.takeIf { result -> result.clear }?.choice }
         val reading = card?.let { readings.getValue(it.id) }?.takeIf { it.clear && it.choice != "unclear" }
-        val selectedAction = actions.firstOrNull { it.id == action?.takeIf { result -> result.clear }?.choice }
         val lines = mutableListOf(header, emotionProbabilities(profile))
         if (card != null && reading != null) {
             lines += "事件：${ChatTemplates.scenes.getValue(card.scene).substringBefore('：')}"
@@ -118,13 +125,16 @@ object JevProtocol {
             lines += reading.probabilities.entries.sortedByDescending { it.value }.take(2)
                 .map { "· ${card.options.getValue(it.key)}：${(it.value * 100).roundToInt()}%" }
         }
-        if (selectedAction != null) lines += "建议：${selectedAction.text}"
+        // 在 detail 文本中也标注有回复建议
+        if (replies.isNotEmpty()) {
+            lines += "回复建议：${replies.size} 条（点击气泡查看）"
+        }
         val label = when {
             card != null && reading != null -> ChatTemplates.scenes.getValue(card.scene).substringBefore('：')
-            selectedAction != null -> "下一步动作"
+            replies.isNotEmpty() -> "回复建议"
             else -> "情绪概率"
         }
-        return Mood(label, emotionScore(profile), 0, "", lines.joinToString("\n"))
+        return Mood(label, emotionScore(profile), 0, "", lines.joinToString("\n"), replies)
     }
 
     fun fallback(profile: ChatProfile): Mood = Mood("情绪概率", emotionScore(profile), 0, "",
@@ -162,6 +172,24 @@ object JevProtocol {
         require(abs(values.values.sum() - 1.0) <= 0.02)
         require(values.getValue(chosen) + 0.000001 >= values.values.max())
         return ChatDecision(chosen, values, confidence)
+    }
+
+    /**
+     * 解析 replies 类型的答案，返回回复建议列表。
+     * 要求至少返回 1 条，最多返回 count 条。
+     */
+    private fun readReplies(answers: JSONObject, key: String): List<String> {
+        val answer = answers.getJSONObject(key)
+        require(answer.getString("type") == "replies") { "答案类型不是 replies" }
+        val array = answer.getJSONArray("replies")
+        require(array.length() >= 1) { "至少需要 1 条回复建议" }
+        val result = mutableListOf<String>()
+        for (i in 0 until array.length()) {
+            val text = array.getString(i).trim()
+            if (text.isNotBlank()) result.add(text)
+        }
+        require(result.isNotEmpty()) { "回复建议全部为空" }
+        return result.take(3)
     }
 
     private fun probability(obj: JSONObject, key: String): Double {
