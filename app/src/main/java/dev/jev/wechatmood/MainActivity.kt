@@ -28,6 +28,7 @@ import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
 import dev.jev.wechatmood.core.SettingsProvider
 import dev.jev.wechatmood.core.Skill
+import dev.jev.wechatmood.core.SkillRepository
 import dev.jev.wechatmood.core.SkillStore
 import dev.jev.wechatmood.core.SkillDownloader
 import dev.jev.wechatmood.core.SkillParser
