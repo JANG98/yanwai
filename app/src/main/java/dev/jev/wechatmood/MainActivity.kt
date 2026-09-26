@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     private var currentRepositoryId: String? = null  // 当前查看的仓库 ID，null 表示显示仓库列表
     private lateinit var importAnalysisLauncher: androidx.activity.result.ActivityResultLauncher<String>
     private lateinit var importSkillLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>
-    private lateinit var importSkillFolderLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri>
+    private lateinit var importSkillFolderLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>
     private val stateListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (!isFinishing && !isDestroyed) refresh() }
     }
