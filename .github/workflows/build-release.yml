@@ -109,7 +109,23 @@ jobs:
           ls -la app/build/outputs/apk/release/
 
       # ---------------------------------------------------------------
-      # 5. 解码签名密钥库并签名 APK
+      # 5. 对齐优化 APK（zipalign，必须在签名之前！v2签名对整个文件哈希，签名后再对齐会破坏v2签名）
+      # ---------------------------------------------------------------
+      - name: Zipalign APK
+        run: |
+          ZIPALIGN=$(find $ANDROID_HOME/build-tools -name "zipalign" | sort -V | tail -1)
+          if [ -n "$ZIPALIGN" ]; then
+            echo "使用 zipalign: $ZIPALIGN"
+            "$ZIPALIGN" -v -p 4 "$APK_UNSIGNED" "${APK_UNSIGNED}.aligned"
+            mv "${APK_UNSIGNED}.aligned" "$APK_UNSIGNED"
+            echo "APK 对齐优化完成"
+          else
+            echo "未找到 zipalign，跳过对齐步骤（不影响安装使用）"
+          fi
+          ls -la "$APK_UNSIGNED"
+
+      # ---------------------------------------------------------------
+      # 6. 解码签名密钥库并签名 APK（v1+v2+v3 全方案签名）
       #    密钥库通过 SIGNING_KEYSTORE_BASE64 环境变量传入，解码为临时文件
       # ---------------------------------------------------------------
       - name: Sign APK
@@ -147,38 +163,27 @@ jobs:
           fi
           echo "使用 apksigner: $APKSIGNER"
 
-          # 签名
+          # 签名（v1+v2+v3 全方案，兼容 Android 7.0 以下和以上）
           "$APKSIGNER" sign \
             --ks /tmp/signing-keystore.jks \
             --ks-pass pass:"$SIGNING_KEYSTORE_PASSWORD" \
             --ks-key-alias "$SIGNING_KEY_ALIAS" \
             --key-pass pass:"$SIGNING_KEY_PASSWORD" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
             --out "$APK_SIGNED" \
             "$APK_UNSIGNED"
 
           echo "APK 签名完成: $APK_SIGNED"
           ls -la "$APK_SIGNED"
 
-          # 验证签名
+          # 验证签名（显示 v1/v2/v3 状态）
           "$APKSIGNER" verify --verbose "$APK_SIGNED"
 
           # 清理临时密钥库（安全考虑）
           rm -f /tmp/signing-keystore.jks
           echo "临时密钥库已清理"
-
-      # ---------------------------------------------------------------
-      # 6. 对齐优化 APK（zipalign，提升运行时性能）
-      # ---------------------------------------------------------------
-      - name: Zipalign APK
-        run: |
-          ZIPALIGN=$(find $ANDROID_HOME/build-tools -name "zipalign" | sort -V | tail -1)
-          if [ -n "$ZIPALIGN" ]; then
-            "$ZIPALIGN" -v -p 4 "$APK_SIGNED" "${APK_SIGNED}.aligned"
-            mv "${APK_SIGNED}.aligned" "$APK_SIGNED"
-            echo "APK 对齐优化完成"
-          else
-            echo "未找到 zipalign，跳过对齐步骤（不影响安装使用）"
-          fi
 
       # ---------------------------------------------------------------
       # 7. 确定版本号
