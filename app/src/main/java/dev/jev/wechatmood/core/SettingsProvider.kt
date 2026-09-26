@@ -48,6 +48,56 @@ class SettingsProvider : ContentProvider() {
                     }.apply()
                 Bundle()
             }
+            // 聊天分析数据持久化（跨进程：微信进程读写，言外进程导入导出）
+            "analysis_save" -> {
+                val json = extras?.getString("record") ?: return Bundle()
+                val identity = Binder.clearCallingIdentity()
+                try { ChatAnalysisStore.importRecord(ctx, json) }
+                finally { Binder.restoreCallingIdentity(identity) }
+                Bundle()
+            }
+            "analysis_find" -> {
+                val key = arg ?: return Bundle()
+                val mood = ChatAnalysisStore.findByKeyLocal(ctx, key)
+                Bundle().apply {
+                    if (mood != null) {
+                        putString("label", mood.label)
+                        putDouble("score", mood.score)
+                        putInt("risk", mood.risk)
+                        putString("raw", mood.raw)
+                        putString("detail", mood.detail)
+                    }
+                }
+            }
+            "analysis_warmup" -> {
+                val identity = Binder.clearCallingIdentity()
+                try {
+                    val json = ChatAnalysisStore.exportAll(ctx)
+                    Bundle().apply { putString("data", json) }
+                } finally { Binder.restoreCallingIdentity(identity) }
+            }
+            "analysis_export" -> {
+                val identity = Binder.clearCallingIdentity()
+                try {
+                    val json = ChatAnalysisStore.exportAll(ctx)
+                    Bundle().apply { putString("data", json) }
+                } finally { Binder.restoreCallingIdentity(identity) }
+            }
+            "analysis_import" -> {
+                val json = extras?.getString("data") ?: return Bundle()
+                val identity = Binder.clearCallingIdentity()
+                try {
+                    val count = ChatAnalysisStore.importAll(ctx, json)
+                    Bundle().apply { putInt("count", count) }
+                } finally { Binder.restoreCallingIdentity(identity) }
+            }
+            "analysis_count" -> {
+                val identity = Binder.clearCallingIdentity()
+                try {
+                    val count = ChatAnalysisStore.totalCountLocal(ctx)
+                    Bundle().apply { putInt("count", count) }
+                } finally { Binder.restoreCallingIdentity(identity) }
+            }
             else -> throw IllegalArgumentException("Unknown method")
         }
     }

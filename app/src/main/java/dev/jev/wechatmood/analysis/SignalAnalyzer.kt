@@ -1,5 +1,6 @@
 package dev.jev.wechatmood.analysis
 
+import android.content.Context
 import dev.jev.wechatmood.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -11,14 +12,30 @@ object SignalAnalyzer {
     private val client = JevHttpClient()
     private val failures = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val failureMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var appContext: Context? = null
     fun failure(key: String): String? = failureMessages[key]
     fun retryFailure(key: String) { failures.remove(key); failureMessages.remove(key) }
+
+    /** 初始化，传入 ApplicationContext，用于持久化存储。 */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
 
     fun submit(input: AnalysisInput, stillVisible: () -> Boolean = { true }): String? {
         if (!ModulePrefs.canAnalyze) return null
         if (MessagePolicy.textOrNull(input.text) == null) return null
         val key = input.key
         if (System.currentTimeMillis() - (failures[key] ?: 0L) < 30_000) return key
+
+        // 先检查持久化存储：如果已经分析过，直接使用缓存，不调用 AI
+        appContext?.let { ctx ->
+            ChatAnalysisStore.findByKey(ctx, key)?.let { cachedMood ->
+                MoodStore.complete(key, cachedMood)
+                MoodLog.i("使用持久化缓存，跳过 AI 调用：${cachedMood.label}")
+                return key
+            }
+        }
+
         if (!MoodStore.claim(key)) return key
         failureMessages.remove(key)
         scope.launch {
@@ -31,6 +48,8 @@ object SignalAnalyzer {
                         ModulePrefs.canAnalyze && stillVisible()
                     }
                     MoodStore.complete(key, mood)
+                    // 保存到持久化存储
+                    appContext?.let { ctx -> ChatAnalysisStore.save(ctx, input, mood) }
                     failures.remove(key)
                     failureMessages.remove(key)
                     MoodLog.i("Jev 闲聊解读完成：${mood.label}")

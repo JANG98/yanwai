@@ -11,6 +11,8 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import dev.jev.wechatmood.BuildConfig
+import dev.jev.wechatmood.analysis.SignalAnalyzer
+import dev.jev.wechatmood.core.ChatAnalysisStore
 import dev.jev.wechatmood.core.ModulePrefs
 import dev.jev.wechatmood.core.MoodLog
 import dev.jev.wechatmood.core.Diagnostics
@@ -64,6 +66,9 @@ class HookEntry : IXposedHookLoadPackage {
             ModulePrefs.init(context)
             MoodLog.i("微信主进程已加载模块 ${BuildConfig.VERSION_NAME}")
             ModulePrefs.report("模块 ${BuildConfig.VERSION_NAME} 已加载，等待打开聊天")
+            // 预热聊天分析持久化缓存，避免二次 AI 调用
+            ChatAnalysisStore.warmup(context)
+            SignalAnalyzer.init(context)
             SettingsEntryHook.install(context.classLoader)
             MessageSniffer.install(context)
             installed = true

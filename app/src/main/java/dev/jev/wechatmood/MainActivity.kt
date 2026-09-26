@@ -30,6 +30,8 @@ import dev.jev.wechatmood.core.SettingsProvider
 import dev.jev.wechatmood.core.Skill
 import dev.jev.wechatmood.core.SkillStore
 import dev.jev.wechatmood.core.SkillDownloader
+import dev.jev.wechatmood.core.ChatAnalysisStore
+import dev.jev.wechatmood.core.AnalysisBackupManager
 import dev.jev.wechatmood.databinding.ActivityMainBinding
 import dev.jev.wechatmood.updates.UpdateNotice
 import dev.jev.wechatmood.ui.ProbeState
@@ -48,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var bindingInputs = false
     private var probeState = ProbeState.UNTESTED
     private var syncingSkills = false
+    private lateinit var importAnalysisLauncher: androidx.activity.result.ActivityResultLauncher<String>
     private val stateListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         runOnUiThread { if (!isFinishing && !isDestroyed) refresh() }
     }
@@ -68,6 +71,10 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(binding.root)
         MoodLog.init(this)
         MoodLog.i("ENVIRONMENT\n${Diagnostics.environment(this)}")
+        // 初始化导入分析数据的文件选择器
+        importAnalysisLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
+            uri?.let { importAnalysisFromUri(it) }
+        }
         // Makes the settings provider visible to WeChat on Android 11+.
         // The provider validates the caller UID before sharing settings with WeChat.
         runCatching {
@@ -158,6 +165,8 @@ class MainActivity : AppCompatActivity() {
         binding.buttonRefreshLog.setOnClickListener { refresh() }
         binding.buttonCopyLog.setOnClickListener { Diagnostics.copy(this) }
         binding.buttonExportLog.setOnClickListener { Diagnostics.export(this) }
+        binding.buttonExportAnalysis.setOnClickListener { exportAnalysisData() }
+        binding.buttonImportAnalysis.setOnClickListener { importAnalysisData() }
         binding.buttonOpenSource.setOnClickListener { openHelp("https://github.com/YIRC99/yanwai") }
         binding.buttonCopyAuthor.setOnClickListener {
             runCatching {
@@ -309,6 +318,11 @@ class MainActivity : AppCompatActivity() {
             "最近记录（${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(last))}）：\n${runtime.getString("status", "")}"
         binding.textFrameworkStatus.text = "$wechat\n$evidence\n这里展示最近上报情况，不代表微信当前在线。"
         if (binding.debugPanel.visibility == View.VISIBLE) binding.textLog.text = Diagnostics.collect(this)
+        // 更新分析数据数量
+        runCatching {
+            val count = ChatAnalysisStore.totalCount(this)
+            binding.textAnalysisCount.text = if (count > 0) "已保存 $count 条分析记录（按聊天对象分组）" else "暂无分析记录，开启聊天分析后自动保存"
+        }
         renderOverview()
     }
 
@@ -686,6 +700,64 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 导出聊天分析数据为 zip 文件，然后通过系统分享菜单保存。
+     */
+    private fun exportAnalysisData() {
+        runCatching {
+            val count = ChatAnalysisStore.totalCount(this)
+            if (count == 0) {
+                Toast.makeText(this, "暂无分析数据可导出", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val zipFile = AnalysisBackupManager.exportToZip(this)
+            // 通过 FileProvider 分享文件
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", zipFile
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "导出分析数据"))
+            Toast.makeText(this, "已导出 $count 条分析记录", Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            MoodLog.e("EXPORT_ANALYSIS_FAILED", it)
+            Toast.makeText(this, "导出失败：${it.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * 打开文件选择器，选择 zip 文件导入分析数据。
+     */
+    private fun importAnalysisData() {
+        runCatching {
+            importAnalysisLauncher.launch("application/zip")
+        }.onFailure {
+            MoodLog.e("IMPORT_ANALYSIS_LAUNCH_FAILED", it)
+            Toast.makeText(this, "无法打开文件选择器", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * 从选择的 zip 文件导入分析数据。
+     */
+    private fun importAnalysisFromUri(uri: Uri) {
+        runCatching {
+            val imported = AnalysisBackupManager.importFromZip(this, uri)
+            runOnUiThread {
+                refresh()
+                Toast.makeText(this, "成功导入 $imported 条分析记录", Toast.LENGTH_SHORT).show()
+            }
+        }.onFailure {
+            MoodLog.e("IMPORT_ANALYSIS_FAILED", it)
+            runOnUiThread {
+                Toast.makeText(this, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
