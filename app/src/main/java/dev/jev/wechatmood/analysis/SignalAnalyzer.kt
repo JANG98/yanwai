@@ -83,10 +83,7 @@ object SignalAnalyzer {
             ChatAnalysis.analyze(input, settings.model, { client.exchange(it, settings) }, {
                 job.ensureActive()
                 shouldContinue()
-            }, skillPrompt) {
-                // 第三轮：生成 3 条回复建议
-                client.generateReplies(input.text, input.context, input.relationship, skillPrompt, settings)
-            }
+            }, skillPrompt)
         } catch (e: org.json.JSONException) {
             throw IllegalStateException("模型返回不完整，本次不显示判断")
         } catch (e: IllegalArgumentException) {

@@ -118,13 +118,13 @@ class HostUi(private val activity: Activity) {
         val relation = if (hasTalker) ChatProfileStore.getRelationship(activity, currentTalker) else ""
         val currentSkillId = if (hasTalker) ChatSkillStore.getSkillId(activity, currentTalker) else null
         val items = if (hasTalker) {
-            arrayOf("分析本屏", "设置关系描述", "加载 skill", "助手设置", "导出运行日志")
+            arrayOf("分析本屏", "分析回复", "设置关系描述", "加载 skill", "助手设置", "导出运行日志")
         } else {
             arrayOf("分析本屏", "助手设置", "导出运行日志")
         }
         dialog = AlertDialog.Builder(activity).setTitle("言外 · $status")
             .setItems(items) { _, which ->
-                val offset = if (hasTalker) 0 else 2
+                val offset = if (hasTalker) 0 else 1
                 when (which + offset) {
                     0 -> {
                         // 分析本屏：开启当前聊天的会话级开关 + 全局绘制开关
@@ -137,13 +137,50 @@ class HostUi(private val activity: Activity) {
                             MessageSniffer.refresh()
                         } else Diagnostics.showFailure(activity, "分析开关未确认保存", ModulePrefs.lastBridgeError ?: "BRIDGE_SAVE_FAILED")
                     }
-                    1 -> if (hasTalker) showRelationshipDialog(relation)
-                    2 -> if (hasTalker) showSkillDialog(currentSkillId)
-                    3 -> openSettings()
-                    4 -> Diagnostics.show(activity)
+                    1 -> if (hasTalker) analyzeReply(relation, currentSkillId)
+                    2 -> if (hasTalker) showRelationshipDialog(relation)
+                    3 -> if (hasTalker) showSkillDialog(currentSkillId)
+                    4 -> openSettings()
+                    5 -> Diagnostics.show(activity)
                 }
             }
             .setNegativeButton("关闭", null).create().also { it.show() }
+    }
+
+    /**
+     * 分析当前聊天中最新的一条对方消息，生成 3 条回复建议。
+     */
+    private fun analyzeReply(relationship: String, currentSkillId: String?) {
+        // 获取最新的一条对方消息
+        val latestMessage = messages.lastOrNull { it.speaker == "对方" }
+        if (latestMessage == null) {
+            android.widget.Toast.makeText(activity, "当前屏幕没有对方的消息", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 获取技能提示词
+        val skillPrompt = if (!currentSkillId.isNullOrBlank()) {
+            runCatching {
+                val prefs = activity.getSharedPreferences(dev.jev.wechatmood.core.ModulePrefs.FILE_NAME, android.content.Context.MODE_PRIVATE)
+                val skill = dev.jev.wechatmood.core.SkillStore.loadAll(prefs).firstOrNull { it.id == currentSkillId && it.enabled }
+                if (skill != null) {
+                    "【当前聊天已加载技能：${skill.name}，以下为该技能的核心原则，用于生成回复建议】\n\n" +
+                        dev.jev.wechatmood.core.SkillStore.skillPrompt(skill)
+                } else ""
+            }.getOrDefault("")
+        } else {
+            dev.jev.wechatmood.core.ModulePrefs.activeSkillPrompt ?: ""
+        }
+
+        // 调用分析
+        ReplySuggestionHelper.analyzeAndShow(
+            activity = activity,
+            messageText = latestMessage.text,
+            contextMessages = messages.takeLast(6).map { dev.jev.wechatmood.core.ContextMessage(it.speaker, it.text) },
+            talker = currentTalker,
+            relationship = relationship,
+            skillPrompt = skillPrompt
+        )
     }
 
     /**
