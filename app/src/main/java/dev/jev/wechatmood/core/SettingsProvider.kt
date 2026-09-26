@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
 import android.os.Process
+import org.json.JSONArray
 import java.util.UUID
 
 /** Settings bridge restricted to this app and WeChat, where the model requests run. */
