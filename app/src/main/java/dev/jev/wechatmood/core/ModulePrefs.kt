@@ -15,7 +15,11 @@ object ModulePrefs {
     @Volatile private var context: Context? = null
     @Volatile private var conversations: ConversationSwitches? = null
     private val manualAnalysis = ManualAnalysis()
-    private val session = SettingsSession()
+    private val analysisSnapshots = AnalysisSnapshots()
+    private val session = SettingsSession {
+        dev.jev.wechatmood.analysis.SignalAnalyzer.resetSettings()
+        analysisSnapshots.clear()
+    }
     private val bridgeWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "yanwai-settings") }
     private val bridge = SettingsBridge(session, { bridgeWorker.execute(it) },
         SystemClock::elapsedRealtime, ::readSettings, ::reportNow)
@@ -62,6 +66,7 @@ object ModulePrefs {
         bridge.receive(snapshot)
         MoodLog.protect(snapshot.api.apiKey)
         MoodLog.protect(snapshot.reply.apiKey)
+        MoodLog.protect(snapshot.intent.llm.apiKey)
         MoodLog.i("SYNC_RECEIVED revision=${snapshot.revision}；广播送达不代表设置服务可访问")
     }
     fun requestReload(force: Boolean = false) = bridge.requestReload(force)
@@ -71,10 +76,11 @@ object ModulePrefs {
         val result = requireNotNull(context).contentResolver.call(SettingsProvider.URI, "config", null, null)
             ?: error("设置服务无响应或不可见；检查隐藏应用列表规则及微信分身所在空间")
         requireNotNull(SettingsSync.decode(result)) { "设置服务返回的配置不完整" }
-            .also { MoodLog.protect(it.api.apiKey); MoodLog.protect(it.reply.apiKey); connected() }
+            .also { MoodLog.protect(it.api.apiKey); MoodLog.protect(it.reply.apiKey); MoodLog.protect(it.intent.llm.apiKey); connected() }
     }.onFailure { failure("BRIDGE_READ_FAILED", it) }.getOrNull()
     // No verified snapshot means disabled; a lost connection preserves the last explicit choice.
     val bridgeAvailable get() = session.current != null
+    fun analysisSettings() = session.current
     fun replySettings() = session.current?.reply ?: dev.jev.wechatmood.reply.ReplySettings.empty()
     val replyConsent get() = session.current?.replyConsent == true
     val exploreMode get() = session.current?.exploreMode == true
@@ -82,14 +88,18 @@ object ModulePrefs {
     fun apiSettings(): ApiSettings = session.current?.api ?: ApiSettings.fromInput(ApiSettings.DEFAULT_ENDPOINT, "")
     fun isChatEnabled(talker: String?) = conversations?.isEnabled(talker) == true
     fun canAnalyze(talker: String?) = isChatEnabled(talker) && session.current?.canAnalyze == true
-    fun analysisInput(input: AnalysisInput): AnalysisInput = manualAnalysis.selectedInput(input) ?: input
+    fun analysisInput(input: AnalysisInput): AnalysisInput = manualAnalysis.selectedInput(input)
+        ?: if (isChatEnabled(input.talker)) analysisSnapshots.resolve(input) else input
     fun shouldDisplay(input: AnalysisInput): Boolean = manualAnalysis.allows(input, isChatEnabled(input.talker))
     fun canAnalyze(input: AnalysisInput): Boolean = shouldDisplay(input) && session.current?.canAnalyze == true
     fun selectMessage(input: AnalysisInput): Boolean = manualAnalysis.select(input)
     fun setChatEnabled(talker: String?, value: Boolean): Boolean = runCatching {
         val saved = conversations?.setEnabled(talker, value) == true
         // Only an explicit, successfully saved switch-off resets this chat's manual choices.
-        if (saved && !value && talker != null) manualAnalysis.clearConversation(talker)
+        if (saved && !value && talker != null) {
+            manualAnalysis.clearConversation(talker)
+            analysisSnapshots.clearConversation(talker)
+        }
         saved
     }.onFailure { MoodLog.e("CHAT_SWITCH_SAVE_FAILED 本地会话开关保存失败", it) }.getOrDefault(false)
     fun report(status: String) = bridge.report(status)
